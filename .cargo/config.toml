@@ -3,12 +3,14 @@
 # bitchat's container-based reproducible builds).
 #
 # `--remap-path-prefix` rewrites the compiler-embedded source paths in
-# panic messages (`file!()`), backtraces, and debug info, so binaries
-# built on any machine (local sandbox: /home/z/my-project/cypher,
-# GitHub runners: /home/runner/work/cypher/cypher) come out clean.
+# panic messages (`file!()`), backtraces, and debug info — covering BOTH
+# the workspace root and the cargo home (dependency sources under
+# ~/.cargo/registry are the other big source of embedded paths).
 [target.'cfg(all())']
 rustflags = [
     "--remap-path-prefix=/home/z/my-project/cypher=/cypher",
     "--remap-path-prefix=/home/runner/work/cypher/cypher=/cypher",
     "--remap-path-prefix=/home/z/cypher=/cypher",
+    "--remap-path-prefix=/home/z/.cargo=/cargo",
+    "--remap-path-prefix=/home/runner/.cargo=/cargo",
 ]

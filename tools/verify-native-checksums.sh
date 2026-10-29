@@ -31,7 +31,11 @@ for library in android/app/src/main/jniLibs/*/libcypher.so; do
     echo "error: missing native library: $library" >&2
     exit 1
   fi
-  if strings "$library" | grep -Eq '/Users/|/home/z/|/home/runner/|[A-Za-z]:\\Users\\'; then
+  # Process substitution: the condition must reflect ONLY grep's verdict.
+  # A plain `strings | grep -q` pipeline under `set -o pipefail` is racy:
+  # grep -q exits at the first match and strings dies of SIGPIPE (141),
+  # flipping the pipeline status and silently skipping this gate.
+  if grep -Eq '/Users/|/home/z/|/home/runner/|[A-Za-z]:\\Users\\' < <(strings "$library"); then
     echo "error: host-specific path detected in $library" >&2
     exit 1
   fi

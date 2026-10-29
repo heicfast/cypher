@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use crate::consts;
+use crate::features::pending_queues::PendingQueues;
 use crate::identity::CypherIdentity;
 use crate::mesh::announce::{self, AnnounceThrottle};
 use crate::mesh::dedup::MessageDeduplicator;
@@ -21,7 +22,8 @@ use crate::mesh::peer_registry::{PeerInfo, PeerRegistry};
 use crate::mesh::relay;
 use crate::mesh::stream::StreamAssembler;
 use crate::mesh::topology::MeshTopologyTracker;
-use crate::noise::{NoiseError, NoiseRole, NoiseSession};
+use crate::noise::session_manager::{ManagerEvent, SessionManager};
+use crate::noise::NoiseError;
 use crate::packet::BitchatPacket;
 use crate::protocol::capabilities::PeerCapabilities;
 use crate::protocol::private::{MeshPingPayload, PrivateMessagePacket};
@@ -87,6 +89,17 @@ pub enum EngineEvent {
     SessionEstablished {
         peer: crate::PeerId,
     },
+    /// A quarantined session was rolled back after a failed replacement
+    /// handshake. `pending_convergence`: outbound drains must wait for the
+    /// manager-owned convergence retry.
+    SessionRestored {
+        peer: crate::PeerId,
+        pending_convergence: bool,
+    },
+    /// A session handshake failed (timeout or authentication failure).
+    SessionFailed {
+        peer: crate::PeerId,
+    },
 }
 
 /// Everything the engine produces in one turn.
@@ -131,7 +144,8 @@ pub struct MeshEngine {
     registry: PeerRegistry,
     topology: MeshTopologyTracker,
     links: HashMap<LinkId, LinkBinding>,
-    sessions: HashMap<String, NoiseSession>,
+    /// Full session state machine (quarantine/rollback/generations).
+    session_manager: SessionManager,
 
     dedup: MessageDeduplicator,
     fragments: FragmentAssemblyBuffer,
@@ -146,15 +160,15 @@ pub struct MeshEngine {
     scanning: bool,
     advertising: bool,
     /// Private messages queued while no Noise session exists; drained on
-    /// session establishment (bitchat's BLENoiseSessionQueues).
-    pending_private: Vec<(crate::PeerId, String, String)>,
+    /// session establishment (bitchat's BLENoiseSessionQueues semantics).
+    pending: PendingQueues,
     /// Gossip sync: broadcast-packet stores + reconciliation scheduling.
     gossip: crate::features::gossip::GossipSyncManager,
     /// Peers we recently gossiped with (initial-sync cooldown).
     initial_synced: Vec<(crate::PeerId, u64)>,
 
     /// Injected clock (tests use a manual one).
-    now_ms: Box<dyn Fn() -> u64 + Send + Sync>,
+    now_ms: crate::noise::session_manager::Clock,
 }
 
 impl MeshEngine {
@@ -168,6 +182,19 @@ impl MeshEngine {
         clock: Box<dyn Fn() -> u64 + Send + Sync>,
     ) -> Self {
         let start = clock();
+        // One shared Arc clock for the engine, its session manager, and
+        // every session the manager creates (deterministic tests).
+        let clock_arc: crate::noise::session_manager::Clock = {
+            let b = clock;
+            std::sync::Arc::new(b)
+        };
+        let session_manager = SessionManager::new(
+            x25519_dalek::StaticSecret::from(identity.noise_static_secret().to_bytes()),
+            identity.peer_id(),
+            crate::noise::session_manager::ManagerConfig::default(),
+            clock_arc.clone(),
+        );
+        let now_ms = clock_arc.clone();
         MeshEngine {
             identity,
             nickname: nickname.into(),
@@ -175,7 +202,7 @@ impl MeshEngine {
             registry: PeerRegistry::new(),
             topology: MeshTopologyTracker::new(),
             links: HashMap::new(),
-            sessions: HashMap::new(),
+            session_manager,
             dedup: MessageDeduplicator::default(),
             fragments: FragmentAssemblyBuffer::default(),
             announce_throttle: AnnounceThrottle::default(),
@@ -187,10 +214,10 @@ impl MeshEngine {
             radio_state: RadioState::Unknown,
             scanning: false,
             advertising: false,
-            pending_private: Vec::new(),
+            pending: PendingQueues::new(),
             gossip: crate::features::gossip::GossipSyncManager::new(),
             initial_synced: Vec::new(),
-            now_ms: clock,
+            now_ms,
         }
     }
 
@@ -223,8 +250,8 @@ impl MeshEngine {
     }
 
     pub fn has_established_session(&self, peer: &crate::PeerId) -> bool {
-        self.sessions
-            .get(peer.short().as_str())
+        self.session_manager
+            .get_session(peer)
             .map(|s| s.is_established())
             .unwrap_or(false)
     }
@@ -324,7 +351,34 @@ impl MeshEngine {
             self.last_maintenance_ms = now;
             self.maintenance_cycle += 1;
             self.maintenance(&mut out, now);
+            // Rekey poll (Swift: 60 s `rekeyCheckInterval` over the same
+            // maintenance pump — establishments needing renegotiation get a
+            // fresh XX handshake).
+            for (peer, _) in self.session_manager.sessions_needing_rekey() {
+                if let Ok(initiation) = self.session_manager.initiate_rekey(&peer) {
+                    if let Some(m1) = self
+                        .session_manager
+                        .claim_handshake_initiation(&initiation, &peer)
+                    {
+                        let packet = BitchatPacket::new(
+                            MessageType::NoiseHandshake.as_u8(),
+                            self.local_peer_id().routing_bytes(),
+                            Some(peer.routing_bytes()),
+                            now,
+                            m1,
+                            consts::MESSAGE_TTL,
+                        );
+                        self.send_packet(packet, &mut out, now);
+                    }
+                }
+            }
         }
+
+        // Session-manager deadlines: initiator/responder bounds, rollback
+        // restores, suppressed-initiation and recovery redispatches.
+        self.session_manager.handle_deadlines(now);
+        let any_link = self.links.keys().next().copied().unwrap_or(0);
+        self.drain_manager_events(any_link, &mut out, now);
 
         out.next_wake_ms = self.next_wake(now);
         out
@@ -361,18 +415,18 @@ impl MeshEngine {
     ) -> EngineOutput {
         let mut out = EngineOutput::default();
         let now = (self.now_ms)();
-        let key = peer.short();
-        let session_ok = self
-            .sessions
-            .get(key.as_str())
-            .map(|s| s.is_established())
-            .unwrap_or(false);
+        let session_ok = self.has_established_session(peer);
 
         if !session_ok {
             // Queue the message and start a handshake; the queue drains on
             // session establishment (mirrors BLENoiseSessionQueues).
-            self.pending_private
-                .push((peer.clone(), content.to_string(), message_id.to_string()));
+            self.pending.append_private_message(
+                peer,
+                crate::features::pending_queues::PendingPrivateMessage {
+                    content: content.to_string(),
+                    message_id: message_id.to_string(),
+                },
+            );
             out.events.push(EngineEvent::MessageDeliveryStatusUpdated {
                 message_id: message_id.to_string(),
                 sending: true,
@@ -398,8 +452,7 @@ impl MeshEngine {
         let mut payload = vec![NoisePayloadType::PrivateMessage.as_u8()];
         payload.extend_from_slice(&pm);
 
-        let session = self.sessions.get_mut(key.as_str()).expect("checked");
-        match session.encrypt(&payload) {
+        match self.session_manager.encrypt(&payload, peer) {
             Ok(ciphertext) => {
                 let packet = BitchatPacket::new(
                     MessageType::NoiseEncrypted.as_u8(),
@@ -423,7 +476,7 @@ impl MeshEngine {
                     failed: true,
                 });
                 if matches!(e, NoiseError::SessionExpired | NoiseError::SessionExhausted) {
-                    self.sessions.remove(key.as_str());
+                    self.session_manager.remove_session(peer);
                     self.initiate_handshake(peer, &mut out, now);
                 }
             }
@@ -847,7 +900,7 @@ impl MeshEngine {
         if !CypherIdentity::verify(signature, &preimage, &info.signing_public_key) {
             return;
         }
-        self.sessions.remove(sender.short().as_str());
+        self.session_manager.remove_session(sender);
         self.registry.remove(sender);
         out.events
             .push(EngineEvent::PeerDisconnected(sender.clone()));
@@ -873,69 +926,93 @@ impl MeshEngine {
             }
         }
 
-        let key = sender.short().as_str().to_string();
-        let is_fresh_initiation = packet.payload.len() == consts::NOISE_XX_INITIAL_MESSAGE_SIZE
-            || !self.sessions.contains_key(&key);
-
-        // The handshake reply MUST be queued before any session-established
-        // side effects (announce, queued-message drain) — otherwise the peer
-        // receives encrypted traffic before the completing handshake message
-        // and clobbers its responder state with a crossed initiation.
-        let mut response: Option<Vec<u8>> = None;
-        let mut established_now = false;
-        if is_fresh_initiation {
-            // Respond (possibly replacing a half-open initiator session).
-            let mut session = NoiseSession::new(
-                sender.clone(),
-                NoiseRole::Responder,
-                clone_static(self.identity.noise_static_secret()),
-            );
-            match session.process_handshake_message(&packet.payload) {
-                Ok(Some(resp)) => {
-                    response = Some(resp);
-                    self.sessions.insert(key, session);
+        // Route through the full manager state machine: quarantine,
+        // rollback cooldown, crossed-initiation gates, generation leases.
+        match self
+            .session_manager
+            .handle_incoming_with_result(sender, &packet.payload)
+        {
+            Ok(result) => {
+                // The reply goes on the wire BEFORE any session-established
+                // side effects — otherwise the peer receives encrypted
+                // traffic before the completing handshake message and
+                // clobbers its responder state with a crossed initiation.
+                if let Some(resp) = result.response {
+                    let reply = BitchatPacket::new(
+                        MessageType::NoiseHandshake.as_u8(),
+                        self.local_peer_id().routing_bytes(),
+                        Some(sender.routing_bytes()),
+                        now,
+                        resp,
+                        consts::MESSAGE_TTL,
+                    );
+                    self.send_packet(reply, out, now);
                 }
-                Ok(None) => {
-                    self.sessions.insert(key, session);
-                    established_now = true;
-                }
-                Err(_) => {}
             }
-        } else if let Some(session) = self.sessions.get_mut(&key) {
-            match session.process_handshake_message(&packet.payload) {
-                Ok(Some(resp)) => {
-                    response = Some(resp);
-                    // The initiator completes while writing message 3.
-                    if session.is_established() {
-                        established_now = true;
+            Err(_) => {
+                // The manager buffered restore/failure events; the tick
+                // pump (and the drain below) surfaces them to the UI.
+            }
+        }
+        self.drain_manager_events(link, out, now);
+    }
+
+    /// Translate buffered session-manager events into engine actions.
+    fn drain_manager_events(&mut self, link: LinkId, out: &mut EngineOutput, now: u64) {
+        for event in self.session_manager.take_events() {
+            match event {
+                ManagerEvent::SessionEstablished { peer, .. } => {
+                    out.events
+                        .push(EngineEvent::SessionEstablished { peer: peer.clone() });
+                    self.on_session_established(&peer, link, out, now);
+                }
+                ManagerEvent::SessionRestored { peer, reason, .. } => {
+                    // Terminal restore: the generation is immediately valid
+                    // for outbound; pending convergence: outbound defers to
+                    // the manager-owned retry.
+                    let pending_convergence =
+                        reason == crate::noise::session_manager::RestoreReason::PendingConvergence;
+                    out.events.push(EngineEvent::SessionRestored {
+                        peer,
+                        pending_convergence,
+                    });
+                }
+                ManagerEvent::SessionFailed { peer, .. } => {
+                    out.events.push(EngineEvent::SessionFailed { peer });
+                }
+                ManagerEvent::HandshakeRecoveryRequired { request } => {
+                    // The engine is the transport callback owner: prepare,
+                    // claim, and put the recovery message 1 on the wire.
+                    match self
+                        .session_manager
+                        .prepare_handshake_recovery(&request, || Ok(()))
+                    {
+                        Ok(Some(crate::noise::session_manager::RecoveryPreparation::Ordinary(
+                            initiation,
+                        ))) => {
+                            if let Some(m1) = self
+                                .session_manager
+                                .claim_handshake_initiation(&initiation, &request.peer_id)
+                            {
+                                let packet = BitchatPacket::new(
+                                    MessageType::NoiseHandshake.as_u8(),
+                                    self.local_peer_id().routing_bytes(),
+                                    Some(request.peer_id.routing_bytes()),
+                                    now,
+                                    m1,
+                                    consts::MESSAGE_TTL,
+                                );
+                                self.send_packet(packet, out, now);
+                            }
+                        }
+                        Ok(Some(
+                            crate::noise::session_manager::RecoveryPreparation::Transferred,
+                        )) => {}
+                        Ok(None) => {}
+                        Err(_) => {}
                     }
                 }
-                Ok(None) => {
-                    established_now = true;
-                }
-                Err(_) => {}
             }
-        }
-
-        // 1. Reply first.
-        if let Some(resp) = response {
-            let reply = BitchatPacket::new(
-                MessageType::NoiseHandshake.as_u8(),
-                self.local_peer_id().routing_bytes(),
-                Some(sender.routing_bytes()),
-                now,
-                resp,
-                consts::MESSAGE_TTL,
-            );
-            self.send_packet(reply, out, now);
-        }
-
-        // 2. Then the session-established side effects.
-        if established_now {
-            out.events.push(EngineEvent::SessionEstablished {
-                peer: sender.clone(),
-            });
-            self.on_session_established(sender, link, out, now);
         }
     }
 
@@ -954,19 +1031,28 @@ impl MeshEngine {
         }
         // Re-announce with force so the peer sees us connected.
         self.send_announce(true, out, now);
-        // Drain queued private messages for this peer.
-        let pending: Vec<(crate::PeerId, String, String)> = self
-            .pending_private
-            .iter()
-            .filter(|(p, _, _)| p.short() == peer.short())
-            .cloned()
-            .collect();
-        self.pending_private
-            .retain(|(p, _, _)| p.short() != peer.short());
-        for (target, content, message_id) in pending {
-            let drained = self.send_private_message(&target, &content, &message_id);
+        // Drain queued private messages for this peer (one-shot FIFO;
+        // failures would re-queue at the front to keep order).
+        let queued = self.pending.take_private_messages(peer);
+        let mut failed = Vec::new();
+        for message in queued {
+            let drained = self.send_private_message(peer, &message.content, &message.message_id);
+            // A drain-time failure (session died mid-drain) goes back to the
+            // FRONT so it precedes anything queued later (Swift semantics).
+            let failed_now = drained.events.iter().any(|e| {
+                matches!(
+                    e,
+                    EngineEvent::MessageDeliveryStatusUpdated { failed: true, .. }
+                )
+            });
+            if failed_now {
+                failed.push(message);
+            }
             out.events.extend(drained.events);
             out.commands.extend(drained.commands);
+        }
+        if !failed.is_empty() {
+            self.pending.prepend_private_messages(peer, failed);
         }
     }
 
@@ -986,13 +1072,7 @@ impl MeshEngine {
                 return;
             }
         }
-        let key = sender.short();
-        let Some(session) = self.sessions.get_mut(key.as_str()) else {
-            // No session: initiate one; the sender will retry.
-            self.initiate_handshake(sender, out, now);
-            return;
-        };
-        match session.decrypt(&packet.payload) {
+        match self.session_manager.decrypt(&packet.payload, sender) {
             Ok(plaintext) => {
                 let Some(&payload_type) = plaintext.first() else {
                     return;
@@ -1030,8 +1110,9 @@ impl MeshEngine {
                 // Local lifecycle failures: reset and re-handshake.
                 NoiseError::SessionExpired
                 | NoiseError::SessionExhausted
-                | NoiseError::NotEstablished => {
-                    self.sessions.remove(key.as_str());
+                | NoiseError::NotEstablished
+                | NoiseError::SessionNotFound
+                | NoiseError::TransportGenerationNotReady => {
                     self.initiate_handshake(sender, out, now);
                 }
                 _ => {}
@@ -1389,26 +1470,27 @@ impl MeshEngine {
         let _ = now;
     }
 
+    /// Start (or join) a handshake with a peer via the session manager:
+    /// initiate-if-absent + one-shot claim, then put message 1 on the wire.
     fn initiate_handshake(&mut self, peer: &crate::PeerId, out: &mut EngineOutput, now: u64) {
-        let key = peer.short().as_str().to_string();
-        // Crossed-handshake tie-break: yield when we are the greater ID and a
-        // fresh initiation may be in flight.
-        let mut session = NoiseSession::new(
-            peer.clone(),
-            NoiseRole::Initiator,
-            clone_static(self.identity.noise_static_secret()),
-        );
-        if let Ok(message1) = session.start_handshake() {
-            self.sessions.insert(key, session);
-            let packet = BitchatPacket::new(
-                MessageType::NoiseHandshake.as_u8(),
-                self.local_peer_id().routing_bytes(),
-                Some(peer.routing_bytes()),
-                now,
-                message1,
-                consts::MESSAGE_TTL,
-            );
-            self.send_packet(packet, out, now);
+        if let Ok(Some(initiation)) =
+            self.session_manager
+                .initiate_handshake_if_absent(peer, true, || Ok(()))
+        {
+            if let Some(m1) = self
+                .session_manager
+                .claim_handshake_initiation(&initiation, peer)
+            {
+                let packet = BitchatPacket::new(
+                    MessageType::NoiseHandshake.as_u8(),
+                    self.local_peer_id().routing_bytes(),
+                    Some(peer.routing_bytes()),
+                    now,
+                    m1,
+                    consts::MESSAGE_TTL,
+                );
+                self.send_packet(packet, out, now);
+            }
         }
     }
 
@@ -1575,12 +1657,11 @@ impl MeshEngine {
                 .max(0.25)
                 * 1000.0) as u64,
         );
+        if let Some(deadline) = self.session_manager.next_deadline_ms() {
+            candidates.push(deadline);
+        }
         candidates.into_iter().min()
     }
-}
-
-fn clone_static(secret: &x25519_dalek::StaticSecret) -> x25519_dalek::StaticSecret {
-    x25519_dalek::StaticSecret::from(secret.to_bytes())
 }
 
 /// Deterministic-ish jitter helper (Xorshift over a thread-local seed).

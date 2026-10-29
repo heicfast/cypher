@@ -23,7 +23,7 @@ pub fn pad(data: &[u8]) -> Vec<u8> {
             }
             let mut out = Vec::with_capacity(target);
             out.extend_from_slice(data);
-            out.extend(std::iter::repeat(shortfall as u8).take(shortfall));
+            out.extend(std::vec::from_elem(shortfall as u8, shortfall));
             out
         }
         None => data.to_vec(),

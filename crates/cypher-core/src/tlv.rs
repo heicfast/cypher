@@ -33,7 +33,7 @@ impl<'a> TlvReader<'a> {
     }
 
     /// Next record, if any. Returns `(type, value)`.
-    pub fn next(&mut self) -> Option<(u8, &'a [u8])> {
+    pub fn next_record(&mut self) -> Option<(u8, &'a [u8])> {
         if self.pos >= self.data.len() {
             return None;
         }
@@ -82,7 +82,7 @@ pub fn collect_all(data: &[u8], len_width: usize, wanted: u8) -> Vec<Vec<u8>> {
         TlvReader::long(data)
     };
     let mut out = Vec::new();
-    while let Some((tag, value)) = r.next() {
+    while let Some((tag, value)) = r.next_record() {
         if tag == wanted {
             out.push(value.to_vec());
         }
@@ -106,11 +106,11 @@ mod tests {
         write_short(&mut buf, 0x02, &[0xAA; 32]);
         write_short(&mut buf, 0xFF, b"unknown");
         let mut r = TlvReader::short(&buf);
-        assert_eq!(r.next(), Some((0x01, b"nick".as_slice())));
-        let (t, v) = r.next().unwrap();
+        assert_eq!(r.next_record(), Some((0x01, b"nick".as_slice())));
+        let (t, v) = r.next_record().unwrap();
         assert_eq!((t, v.len()), (0x02, 32));
-        assert_eq!(r.next().unwrap().0, 0xFF);
-        assert_eq!(r.next(), None);
+        assert_eq!(r.next_record().unwrap().0, 0xFF);
+        assert_eq!(r.next_record(), None);
     }
 
     #[test]
@@ -118,17 +118,17 @@ mod tests {
         let mut buf = Vec::new();
         write_long(&mut buf, 0x03, &[0u8; 300]);
         let mut r = TlvReader::long(&buf);
-        let (t, v) = r.next().unwrap();
+        let (t, v) = r.next_record().unwrap();
         assert_eq!(t, 0x03);
         assert_eq!(v.len(), 300);
-        assert_eq!(r.next(), None);
+        assert_eq!(r.next_record(), None);
     }
 
     #[test]
     fn truncation_rejected() {
         let buf = [0x01u8, 0x05, 0x01, 0x02]; // claims len 5, has 2
         let mut r = TlvReader::short(&buf);
-        assert_eq!(r.next(), None);
+        assert_eq!(r.next_record(), None);
     }
 
     #[test]

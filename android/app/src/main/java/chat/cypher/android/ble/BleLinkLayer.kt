@@ -84,7 +84,7 @@ class BleLinkLayer(private val context: Context) {
         }
         pushEvent(EVENT_RADIO_STATE, argInt = 5)
         openGattServer()
-        startScanInternal()
+        startScan(allowDuplicates = true)
     }
 
     fun stop() {
@@ -99,7 +99,7 @@ class BleLinkLayer(private val context: Context) {
 
     // ---- engine event feed --------------------------------------------------------
 
-    private fun handle(): Long = MeshRuntime.engineHandle() ?: return
+    private fun handle(): Long? = MeshRuntime.engineHandle()
 
     private fun pushEvent(
         type: Int,
@@ -185,7 +185,7 @@ class BleLinkLayer(private val context: Context) {
     }
 
     @Synchronized
-    fun stopScanInternal() {
+    private fun stopScanInternal() {
         val adapter = bluetoothAdapter ?: return
         if (!scanning) return
         try {
@@ -294,7 +294,7 @@ class BleLinkLayer(private val context: Context) {
             }
         }
 
-        override fun onDescriptorWrite(
+        override fun onDescriptorWriteRequest(
             device: BluetoothDevice,
             requestId: Int,
             descriptor: BluetoothGattDescriptor,

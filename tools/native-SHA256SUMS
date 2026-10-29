@@ -1,0 +1,4 @@
+1afbecc8702b3a7140c3822777f9f0dd91e309de35130e715f1cd08bed9703d7  app/src/main/jniLibs/arm64-v8a/libcypher.so
+64effbc1568cee5d658ab2554ba29f52805a2239bbd4f0335986d6d004960512  app/src/main/jniLibs/armeabi-v7a/libcypher.so
+2da109cc8761c1e7769069a639e490584db250ca4b93720f516f26bed3ef222f  app/src/main/jniLibs/x86/libcypher.so
+3f04380dabcde9d233d1ad9d41a4360d015b6a86a157ea2b60d1e7e584affed6  app/src/main/jniLibs/x86_64/libcypher.so

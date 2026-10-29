@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build debug APK
@@ -20,27 +23,19 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Set up and validate Gradle
+        uses: gradle/actions/setup-gradle@v3
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-37 build-tools;37.0.0 ndk;28.2.13676358
+          # NOTE: the platform ships as the minor-versioned package
+          # (platforms;android-37.0) — a bare `platforms;android-37`
+          # does not exist in the repository index.
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0 ndk;28.2.13676358
 
-      - name: Install Rust (latest stable)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
-
-      - name: Build Rust core (debug, all ABIs)
-        working-directory: ${{ github.workspace }}
-        run: |
-          for target in aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android; do
-            cargo ndk -t $target -o android/app/src/main/jniLibs build -p cypher-android
-          done
+      - name: Verify checked-in native libraries
+        run: ./tools/verify-native-checksums.sh
 
       - name: Build APK
         working-directory: android

@@ -1,5 +1,7 @@
 package chat.cypher.android.core
 
+import android.content.Context
+
 /**
  * JNI surface into the Rust mesh core (`libcypher.so`).
  *

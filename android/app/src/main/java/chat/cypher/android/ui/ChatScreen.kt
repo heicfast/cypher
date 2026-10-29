@@ -1,6 +1,7 @@
 package chat.cypher.android.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,8 +20,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import chat.cypher.android.ble.MeshEvents
 import chat.cypher.android.core.CypherBridge
-import chat.cypher.android.core.MeshEvents
 import chat.cypher.android.core.MeshRuntime
 import chat.cypher.android.ui.theme.CypherTypography
 import chat.cypher.android.ui.theme.BitchatFontFamily
@@ -77,7 +78,9 @@ fun ChatScreen() {
             }
             for (i in 0 until events.length()) {
                 val event = events.optJSONObject(i) ?: continue
-                val variant = event.keys().nextOrNull() ?: continue
+                val keys = event.keys()
+                if (!keys.hasNext()) continue
+                val variant = keys.next()
                 val fields = event.optJSONObject(variant) ?: JSONObject()
                 when (variant) {
                     "PublicMessageReceived" -> {
@@ -93,12 +96,8 @@ fun ChatScreen() {
                     }
                     "NoisePayloadReceived" -> {
                         val peer = fields.optString("peer")
-                        val payloadHex = fields.optString("payload")
-                        // The payload is a typed binary (message/receipt/file);
-                        // the full UI decodes per type — show a placeholder.
-                        val content = 
-                        // Private messages carry the typed payload; show a
-                        // compact preview.
+                        // Private messages carry a typed encrypted payload; the
+                        // full UI decodes per type — show a compact preview.
                         val message = ChatMessage(
                             id = "noise-${System.nanoTime()}",
                             sender = "noise:${peer.take(8)}",
@@ -344,8 +343,7 @@ private fun PeerListSheet(
                 leadingContent = {
                     Icon(Icons.Default.People, null, tint = MaterialTheme.colorScheme.primary)
                 },
-                modifier = Modifier.padding(horizontal = 8.dp),
-                onClick = onDeselect,
+                modifier = Modifier.padding(horizontal = 8.dp).clickable(onClick = onDeselect),
             )
             peers.forEach { peer ->
                 ListItem(
@@ -359,8 +357,7 @@ private fun PeerListSheet(
                             }
                         )
                     },
-                    modifier = Modifier.padding(horizontal = 8.dp),
-                    onClick = { onSelect(peer) },
+                    modifier = Modifier.padding(horizontal = 8.dp).clickable(onClick = { onSelect(peer) }),
                 )
             }
             if (peers.isEmpty()) {

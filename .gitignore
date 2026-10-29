@@ -14,11 +14,12 @@ Cargo.lock.bak
 android/.cxx/
 *.apk
 *.aab
-*.so
-!**/src/main/**/*
 
-# JNI build outputs
-jniLibs/
+# Native libs: ignore stray .so everywhere EXCEPT the checked-in
+# release libraries under android/app/src/main/jniLibs (bitchat-style
+# prebuilt native pipeline — integrity pinned by tools/native-SHA256SUMS).
+*.so
+!android/app/src/main/jniLibs/**/*.so
 
 # IDE
 .idea/

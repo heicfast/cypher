@@ -1,5 +1,3 @@
-import org.gradle.api.tasks.Exec
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -8,6 +6,7 @@ plugins {
 android {
     namespace = "chat.cypher.android"
     compileSdk = 37
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "chat.cypher.droid"
@@ -43,12 +42,6 @@ android {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
         }
     }
-
-    sourceSets {
-        getByName("main") {
-            jniLibs.srcDirs("src/main/jniLibs")
-        }
-    }
 }
 
 dependencies {
@@ -76,71 +69,12 @@ dependencies {
 }
 
 // ---------------------------------------------------------------------------
-// Rust core: build libcypher.so with cargo-ndk into jniLibs.
+// Rust core (libcypher.so)
+//
+// Native libraries are checked in under src/main/jniLibs (one per ABI,
+// release profile), exactly like bitchat's prebuilt arti static libraries.
+// Integrity is verified by tools/verify-native-checksums.sh (CI + pre-push).
+// Rebuild from source with: `just build-android` or `cargo ndk ...` — see
+// Justfile and the rust.yml workflow (android-lib job) which compiles the
+// core from source on every push.
 // ---------------------------------------------------------------------------
-
-val rustDir: String = layout.projectDirectory.dir("../..").asFile.absolutePath
-val rustTargets = mapOf(
-    "arm64-v8a" to "aarch64-linux-android",
-    "x86_64" to "x86_64-linux-android",
-    "armeabi-v7a" to "armv7-linux-androideabi",
-    "x86" to "i686-linux-android",
-)
-
-val buildRustDebug by tasks.registering {
-    group = "rust"
-    description = "Build the Rust mesh core for all Android ABIs (debug)."
-    doLast {
-        val abis = android.defaultConfig.ndk.abiFilters.get()
-        abis.forEach { abi ->
-            val triple = rustTargets[abi] ?: return@forEach
-            execRust(triple, false, abi)
-        }
-    }
-}
-
-val buildRustRelease by tasks.registering {
-    group = "rust"
-    description = "Build the Rust mesh core for all Android ABIs (release)."
-    doLast {
-        val abis = android.defaultConfig.ndk.abiFilters.get()
-        abis.forEach { abi ->
-            val triple = rustTargets[abi] ?: return@forEach
-            execRust(triple, true, abi)
-        }
-    }
-}
-
-fun execRust(triple: String, release: Boolean, abi: String) {
-    val output = File(rustDir, "target/${triple}/${if (release) "release" else "debug"}/libcypher.so")
-    val jniDir = File(projectDir, "src/main/jniLibs/$abi").apply { mkdirs() }
-    exec {
-        workingDir = File(rustDir)
-        commandLine(
-            "cargo", "ndk",
-            "-t", triple,
-            "-o", jniDir.absolutePath,
-            "build",
-            "-p", "cypher-android",
-            if (release) "--release" else "",
-        )
-        // cargo-ndk needs ANDROID_NDK_HOME or NDK_HOME.
-        environment["ANDROID_NDK_HOME"] = System.getenv("ANDROID_NDK_HOME")
-            ?: System.getenv("NDK_HOME") ?: ""
-    }.assertNormalExitValue()
-    if (!output.exists() && !File(jniDir, "libcypher.so").exists()) {
-        throw GradleException("cargo-ndk produced no libcypher.so for $abi")
-    }
-}
-
-tasks.matching { it.name.startsWith("merge") && it.name.contains("JniLibFolders") }.configureEach {
-    dependsOn(buildRustDebug)
-}
-tasks.matching { it.name == "externalNativeBuildDebug" }.configureEach {
-    dependsOn(buildRustDebug)
-}
-
-afterEvaluate {
-    tasks.matching { it.name == "mergeDebugJniLibFolders" }.configureEach { dependsOn(buildRustDebug) }
-    tasks.matching { it.name == "mergeReleaseJniLibFolders" }.configureEach { dependsOn(buildRustRelease) }
-}

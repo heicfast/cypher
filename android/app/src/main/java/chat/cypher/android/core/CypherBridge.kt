@@ -1,7 +1,5 @@
 package chat.cypher.android.core
 
-import android.content.Context
-
 /**
  * JNI surface into the Rust mesh core (`libcypher.so`).
  *
@@ -164,14 +162,6 @@ object CypherBridge {
             }
             else -> null
         }
-    }
-
-    // ---- helpers ---------------------------------------------------------------
-
-    /** Run a block with the engine handle on the calling thread. */
-    inline fun <T> withEngine(context: Context, block: (Long) -> T?): T? {
-        val handle = MeshRuntime.engineHandle() ?: return null
-        return block(handle)
     }
 }
 

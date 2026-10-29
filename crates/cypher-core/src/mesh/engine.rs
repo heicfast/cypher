@@ -148,6 +148,10 @@ pub struct MeshEngine {
     /// Private messages queued while no Noise session exists; drained on
     /// session establishment (bitchat's BLENoiseSessionQueues).
     pending_private: Vec<(crate::PeerId, String, String)>,
+    /// Gossip sync: broadcast-packet stores + reconciliation scheduling.
+    gossip: crate::features::gossip::GossipSyncManager,
+    /// Peers we recently gossiped with (initial-sync cooldown).
+    initial_synced: Vec<(crate::PeerId, u64)>,
 
     /// Injected clock (tests use a manual one).
     now_ms: Box<dyn Fn() -> u64 + Send + Sync>,
@@ -184,6 +188,8 @@ impl MeshEngine {
             scanning: false,
             advertising: false,
             pending_private: Vec::new(),
+            gossip: crate::features::gossip::GossipSyncManager::new(),
+            initial_synced: Vec::new(),
             now_ms: clock,
         }
     }
@@ -621,6 +627,9 @@ impl MeshEngine {
             }
         }
 
+        // Gossip: remember broadcast traffic for reconciliation.
+        self.gossip.observe(&packet);
+
         // Type dispatch.
         match MessageType::from_u8(packet.packet_type) {
             Some(MessageType::Announce) => self.handle_announce(packet, link, &sender, out, now),
@@ -646,10 +655,29 @@ impl MeshEngine {
             Some(MessageType::FileTransfer) => self.handle_file_transfer(packet, &sender, out, now),
             Some(MessageType::BoardPost) => self.handle_board_post(&packet, &sender, out, now),
             Some(MessageType::VoiceFrame) => self.handle_voice_frame(packet, &sender, out, now),
-            Some(MessageType::PrekeyBundle)
-            | Some(MessageType::CourierEnvelope)
-            | Some(MessageType::RequestSync) => {
-                // Handled by the features layer hooks; relayed transparently.
+            Some(MessageType::RequestSync) => {
+                // Link-local (ttl 0 enforced); serve the diff back to the
+                // requester as directed RSR-flagged re-sends.
+                if packet.ttl == 0 {
+                    if let Some(request) =
+                        crate::protocol::sync::RequestSyncPacket::decode(&packet.payload)
+                    {
+                        if let Some(missing) = self.gossip.serve_request(&sender, &request) {
+                            for frame in missing {
+                                if let Some(mut response) = BitchatPacket::from_binary(&frame) {
+                                    response.recipient_id = Some(sender.routing_bytes());
+                                    response.ttl = 0;
+                                    response.is_rsr = true;
+                                    self.send_packet(response, out, now);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Some(MessageType::PrekeyBundle) | Some(MessageType::CourierEnvelope) => {
+                // Relayed transparently; the features layer hooks carry the
+                // semantic handling.
                 self.schedule_relay(packet, link, &message_id, out, now);
             }
             _ => {
@@ -724,6 +752,10 @@ impl MeshEngine {
 
         let is_connected = accepted.is_direct || was_connected;
         self.registry.set_connected(sender, is_connected);
+        // Fresh direct peers get an initial sync pass after 5 s.
+        if accepted.is_direct && !was_connected {
+            self.initial_synced.push((sender.clone(), now));
+        }
 
         // Topology.
         self.topology
@@ -1458,6 +1490,76 @@ impl MeshEngine {
         self.ping_probes.retain(|_, p| {
             now.saturating_sub(p.sent_ms) < (consts::MESH_PING_TIMEOUT_S * 1000.0) as u64
         });
+
+        // Gossip rounds: build REQUEST_SYNC for due store classes.
+        if let Some(classes) = self.gossip.sync_due() {
+            if let Some(request) = self.gossip.build_request(&classes) {
+                if let Some(payload) = request.encode() {
+                    let target = self.registry.connected_peers().first().cloned();
+                    if let Some(peer) = target {
+                        self.gossip.request_manager.record_request(&peer, now);
+                        let mut packet = BitchatPacket::new(
+                            MessageType::RequestSync.as_u8(),
+                            self.local_peer_id().routing_bytes(),
+                            Some(peer.routing_bytes()),
+                            now,
+                            payload,
+                            0, // link-local
+                        );
+                        let preimage = packet.to_binary_data_for_signing().expect("sync encodable");
+                        packet.signature = Some(self.identity.sign(&preimage));
+                        self.send_packet(packet, out, now);
+                    }
+                }
+            }
+        }
+
+        // Initial sync to freshly connected peers (5 s after connect).
+        let initial_delay = consts::SYNC_INITIAL_SYNC_DELAY_S * 1000;
+        // Snapshot + one-shot pass (the closure cannot borrow the engine).
+        let pending: Vec<(crate::PeerId, u64)> = std::mem::take(&mut self.initial_synced);
+        for (peer, at) in pending {
+            let connected = self
+                .registry
+                .get(&peer)
+                .map(|p| p.is_connected)
+                .unwrap_or(false);
+            if !connected {
+                continue; // peer left before the sync fired
+            }
+            let age = now.saturating_sub(at);
+            if age < initial_delay {
+                self.initial_synced.push((peer, at)); // not yet due
+                continue;
+            }
+            if age >= initial_delay + 60_000 {
+                continue; // one-shot lapsed
+            }
+            let classes = vec![
+                crate::features::gossip::StoreClass::Messages,
+                crate::features::gossip::StoreClass::Fragments,
+                crate::features::gossip::StoreClass::Files,
+                crate::features::gossip::StoreClass::Prekeys,
+                crate::features::gossip::StoreClass::Board,
+                crate::features::gossip::StoreClass::GroupMessages,
+            ];
+            if let Some(request) = self.gossip.build_request(&classes) {
+                if let Some(payload) = request.encode() {
+                    self.gossip.request_manager.record_request(&peer, now);
+                    let mut packet = BitchatPacket::new(
+                        MessageType::RequestSync.as_u8(),
+                        self.local_peer_id().routing_bytes(),
+                        Some(peer.routing_bytes()),
+                        now,
+                        payload,
+                        0,
+                    );
+                    let preimage = packet.to_binary_data_for_signing().expect("sync encodable");
+                    packet.signature = Some(self.identity.sign(&preimage));
+                    self.send_packet(packet, out, now);
+                }
+            }
+        }
 
         // Every third cycle: deeper cleanup (already covered incrementally).
     }

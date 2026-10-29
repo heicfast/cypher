@@ -219,7 +219,7 @@ mod tests {
         let mut r = PeerRegistry::new();
         let p = upsert(&mut r, "0011223344556677", 0);
         r.set_connected(&p, true);
-        let (d, rm) = r.reconcile(9_000, &[p.clone()]);
+        let (d, rm) = r.reconcile(9_000, std::slice::from_ref(&p));
         assert!(d.is_empty() && rm.is_empty());
         assert!(r.get(&p).unwrap().is_connected);
     }

@@ -15,10 +15,6 @@ import chat.cypher.android.ui.theme.CypherTheme
 
 class MainActivity : ComponentActivity() {
 
-    private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
-            .let { it }
-
     private fun requiredPermissions(): Array<String> {
         val permissions = mutableListOf(
             Manifest.permission.ACCESS_FINE_LOCATION, // BLE scan results on Android < 12

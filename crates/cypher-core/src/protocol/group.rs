@@ -640,9 +640,9 @@ mod tests {
             signing_key: vec![1; 32],
             nickname: "🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉".into(),
         };
-        let blob = GroupRosterCoding::encode(&[member.clone()]).unwrap();
+        let blob = GroupRosterCoding::encode(std::slice::from_ref(&member)).unwrap();
         let decoded = GroupRosterCoding::decode(&blob).unwrap();
-        assert!(decoded[0].nickname.as_bytes().len() <= NICKNAME_MAX_BYTES);
+        assert!(decoded[0].nickname.len() <= NICKNAME_MAX_BYTES);
         assert!(decoded[0].nickname.chars().next().is_some());
     }
 }

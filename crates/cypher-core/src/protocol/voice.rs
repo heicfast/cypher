@@ -176,7 +176,7 @@ mod tests {
         let with_empty: Vec<Vec<u8>> = vec![vec![], vec![1]];
         assert!(VoiceBurstPacket::data(id, 1, &with_empty).is_none());
         // Truncated frame list rejected on decode.
-        let mut bad = VoiceBurstPacket::data(id, 1, &vec![vec![1, 2, 3]]).unwrap();
+        let mut bad = VoiceBurstPacket::data(id, 1, &[vec![1, 2, 3]]).unwrap();
         bad.payload.truncate(bad.payload.len() - 1);
         assert!(bad.decode_frames().is_none());
     }
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn content_budget_enforced() {
         let id = [2u8; 8];
-        let mut pkt = VoiceBurstPacket::data(id, 1, &vec![vec![0xAA; 100]]).unwrap();
+        let mut pkt = VoiceBurstPacket::data(id, 1, &[vec![0xAA; 100]]).unwrap();
         pkt.payload = vec![0xBB; MAX_BURST_CONTENT_BYTES + 1];
         assert!(pkt.encode().is_none());
     }

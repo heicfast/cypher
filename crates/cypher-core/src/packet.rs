@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(back.payload, pkt.payload);
         assert_eq!(back.signature, Some([0xAB; 64]));
         assert_eq!(back.ttl, 7);
-        assert_eq!(back.wire_payload.as_ref().unwrap().compressed, false);
+        assert!(!back.wire_payload.as_ref().unwrap().compressed);
         // Re-encode is stable.
         assert_eq!(back.to_binary_data(false).unwrap(), wire);
     }

@@ -311,7 +311,7 @@ mod tests {
     use super::*;
     use crate::identity::CypherIdentity;
 
-    struct FixedClock(u64);
+    struct FixedClock(#[allow(dead_code)] u64);
     impl FixedClock {
         fn at(ms: u64) -> Box<dyn Fn() -> u64 + Send + Sync> {
             let cell = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(ms));
@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn bundle_store_newer_wins_and_assigns() {
         let owner = CypherIdentity::generate();
-        let mut remote = LocalPrekeyStore::with_clock(FixedClock::at(1000));
+        let remote = LocalPrekeyStore::with_clock(FixedClock::at(1000));
         let bundle = remote.build_bundle(&owner).unwrap();
 
         let mut store = PrekeyBundleStore::new();
@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn stale_bundles_not_stored() {
         let owner = CypherIdentity::generate();
-        let mut remote = LocalPrekeyStore::with_clock(FixedClock::at(1000));
+        let remote = LocalPrekeyStore::with_clock(FixedClock::at(1000));
         let mut bundle = remote.build_bundle(&owner).unwrap();
         bundle.generated_at = 1000;
         let mut store = PrekeyBundleStore::new();

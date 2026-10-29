@@ -17,6 +17,7 @@ impl Clock {
     fn new(start: u64) -> Self {
         Clock(Arc::new(AtomicU64::new(start)))
     }
+    #[allow(dead_code)]
     fn now(&self) -> u64 {
         self.0.load(Ordering::SeqCst)
     }
@@ -32,6 +33,7 @@ impl Clock {
 /// A node: engine + collected UI events, on a single simulated link (id 1).
 struct Node {
     engine: MeshEngine,
+    #[allow(dead_code)]
     name: String,
     events: Vec<EngineEvent>,
 }

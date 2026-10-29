@@ -12,7 +12,7 @@ use crate::util::be;
 
 pub const MAX_PAYLOAD_BYTES: usize = consts::FILE_MAX_PAYLOAD_BYTES;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct BitchatFilePacket {
     pub file_name: String,
     pub file_size: u32,
@@ -21,7 +21,11 @@ pub struct BitchatFilePacket {
 }
 
 impl BitchatFilePacket {
-    pub fn new(file_name: impl Into<String>, mime_type: impl Into<String>, content: Vec<u8>) -> Self {
+    pub fn new(
+        file_name: impl Into<String>,
+        mime_type: impl Into<String>,
+        content: Vec<u8>,
+    ) -> Self {
         let size = content.len() as u32;
         BitchatFilePacket {
             file_name: file_name.into(),
@@ -42,7 +46,8 @@ impl BitchatFilePacket {
             return None;
         }
 
-        let mut encoded = Vec::with_capacity(6 + name.len() + 6 + 4 + 6 + mime.len() + 5 + self.content.len());
+        let mut encoded =
+            Vec::with_capacity(6 + name.len() + 6 + 4 + 6 + mime.len() + 5 + self.content.len());
 
         encoded.push(0x01);
         be::put_u16(&mut encoded, name.len() as u16);
@@ -165,7 +170,9 @@ impl PrivateMediaMessageIdentity {
             return false;
         };
         digest.len() == Self::DIGEST_HEX_LENGTH
-            && digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            && digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     }
 
     fn is_uuid(s: &str) -> bool {
@@ -229,7 +236,11 @@ impl PrivateMediaMessageIdentity {
         // the leaf name, each length-prefixed with u32 BE.
         let sender_bare = bare_short(sender_short);
         let recipient_bare = bare_short(recipient_short);
-        let fields: [&[u8]; 3] = [sender_bare.as_bytes(), recipient_bare.as_bytes(), leaf.as_bytes()];
+        let fields: [&[u8]; 3] = [
+            sender_bare.as_bytes(),
+            recipient_bare.as_bytes(),
+            leaf.as_bytes(),
+        ];
 
         let mut input = Self::DOMAIN.to_vec();
         for field in fields {
@@ -238,7 +249,11 @@ impl PrivateMediaMessageIdentity {
         }
         let digest = crate::util::sha256(&input);
         let hex = crate::util::hex_encode(&digest);
-        Some(format!("{}{}", Self::ID_PREFIX, &hex[..Self::DIGEST_HEX_LENGTH]))
+        Some(format!(
+            "{}{}",
+            Self::ID_PREFIX,
+            &hex[..Self::DIGEST_HEX_LENGTH]
+        ))
     }
 }
 
@@ -269,7 +284,10 @@ mod tests {
         assert_eq!(decoded.content.len(), 2048);
         assert_eq!(decoded.message_prefix(), "[image] ");
         // Canonical encoding: content TLV carries a u32 length.
-        assert_eq!(&encoded[encoded.len() - 2048 - 5..encoded.len() - 2048], &[0x04, 0, 0, 8, 0]);
+        assert_eq!(
+            &encoded[encoded.len() - 2048 - 5..encoded.len() - 2048],
+            &[0x04, 0, 0, 8, 0]
+        );
     }
 
     #[test]
@@ -313,7 +331,13 @@ mod tests {
 
     #[test]
     fn oversized_rejected() {
-        assert!(BitchatFilePacket::new("big.bin", "application/octet-stream", vec![0; MAX_PAYLOAD_BYTES + 1]).encode().is_none());
+        assert!(BitchatFilePacket::new(
+            "big.bin",
+            "application/octet-stream",
+            vec![0; MAX_PAYLOAD_BYTES + 1]
+        )
+        .encode()
+        .is_none());
     }
 
     #[test]
@@ -342,15 +366,24 @@ mod tests {
             )
         );
         // Voice burst id qualifies.
-        assert!(PrivateMediaMessageIdentity::stable_id("aabb001122334455", "ccdd001122334455", "voice_deadbeefdeadbeef.m4a").is_some());
+        assert!(PrivateMediaMessageIdentity::stable_id(
+            "aabb001122334455",
+            "ccdd001122334455",
+            "voice_deadbeefdeadbeef.m4a"
+        )
+        .is_some());
         // Non-qualifying filenames → None.
         assert!(PrivateMediaMessageIdentity::stable_id("a", "b", "notes.txt").is_none());
         assert!(PrivateMediaMessageIdentity::stable_id("a", "b", "img_../evil.jpg").is_none());
         assert!(PrivateMediaMessageIdentity::stable_id("a", "b", "img_nouuid.jpg").is_none());
         assert!(PrivateMediaMessageIdentity::stable_id("a", "b", "voice_short.m4a").is_none());
         // Stable-ID shape check.
-        assert!(PrivateMediaMessageIdentity::is_stable_id("media-910bd42c65060ab76bb6406f220c4516"));
+        assert!(PrivateMediaMessageIdentity::is_stable_id(
+            "media-910bd42c65060ab76bb6406f220c4516"
+        ));
         assert!(!PrivateMediaMessageIdentity::is_stable_id("media-ZZZ"));
-        assert!(!PrivateMediaMessageIdentity::is_stable_id("img-910bd42c65060ab76bb6406f220c4516"));
+        assert!(!PrivateMediaMessageIdentity::is_stable_id(
+            "img-910bd42c65060ab76bb6406f220c4516"
+        ));
     }
 }

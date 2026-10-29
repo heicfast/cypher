@@ -7,7 +7,7 @@ use crate::consts;
 use crate::protocol::capabilities::PeerCapabilities;
 
 /// Everything the engine tracks about a known peer.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct PeerInfo {
     pub peer_id: crate::PeerId,
     pub nickname: String,
@@ -110,7 +110,11 @@ impl PeerRegistry {
     /// Connectivity pass: connected peers not seen for 8 s with no live links
     /// are marked disconnected; disconnected peers past the retention window
     /// (60 s verified / 45 s unverified) are removed.
-    pub fn reconcile(&mut self, now_ms: u64, live_peers: &[crate::PeerId]) -> (Vec<crate::PeerId>, Vec<crate::PeerId>) {
+    pub fn reconcile(
+        &mut self,
+        now_ms: u64,
+        live_peers: &[crate::PeerId],
+    ) -> (Vec<crate::PeerId>, Vec<crate::PeerId>) {
         let inactivity = (consts::BLE_PEER_INACTIVITY_TIMEOUT_S * 1000.0) as u64;
         let retention_verified = (consts::BLE_PEER_RETENTION_VERIFIED_S * 1000.0) as u64;
         let retention_unverified = (consts::BLE_PEER_RETENTION_UNVERIFIED_S * 1000.0) as u64;

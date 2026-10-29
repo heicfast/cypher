@@ -1,11 +1,11 @@
 //! Private group chat: creator-signed state, roster blobs, and encrypted
 //! group message envelopes (MessageType 0x25).
 
-use chacha20poly1305::aead::{Aead, Payload};
-use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
 use crate::consts;
 use crate::tlv::{write_long, TlvReader};
 use crate::util::{hex_decode, hex_encode, sha256};
+use chacha20poly1305::aead::{Aead, Payload};
+use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
 
 pub const GROUP_ID_LENGTH: usize = consts::GROUP_ID_LENGTH;
 pub const GROUP_KEY_LENGTH: usize = consts::GROUP_KEY_LENGTH;
@@ -41,7 +41,9 @@ pub struct BitchatGroup {
 
 impl BitchatGroup {
     pub fn creator(&self) -> Option<&GroupMember> {
-        self.members.iter().find(|m| m.fingerprint == self.creator_fingerprint)
+        self.members
+            .iter()
+            .find(|m| m.fingerprint == self.creator_fingerprint)
     }
 
     pub fn is_member(&self, fingerprint: &str) -> bool {
@@ -183,12 +185,17 @@ impl GroupStatePayload {
         content
     }
 
-    pub fn make_signed(group: &BitchatGroup, key: &[u8], sign: &dyn Fn(&[u8]) -> Vec<u8>) -> Option<Self> {
+    pub fn make_signed(
+        group: &BitchatGroup,
+        key: &[u8],
+        sign: &dyn Fn(&[u8]) -> Vec<u8>,
+    ) -> Option<Self> {
         let roster_blob = GroupRosterCoding::encode(&group.members)?;
         if group.group_id.len() != GROUP_ID_LENGTH || key.len() != GROUP_KEY_LENGTH {
             return None;
         }
-        let content = Self::signing_content(&group.group_id, group.epoch, key, &roster_blob, &group.name);
+        let content =
+            Self::signing_content(&group.group_id, group.epoch, key, &roster_blob, &group.name);
         let signature = sign(&content);
         if signature.len() != 64 {
             return None;
@@ -239,7 +246,9 @@ impl GroupStatePayload {
                 0x01 if value.len() == GROUP_ID_LENGTH => group_id = Some(value.to_vec()),
                 0x02 => name = String::from_utf8(value.to_vec()).ok(),
                 0x03 if value.len() == GROUP_KEY_LENGTH => key = Some(value.to_vec()),
-                0x04 if value.len() == 4 => epoch = Some(u32::from_be_bytes(value.try_into().ok()?)),
+                0x04 if value.len() == 4 => {
+                    epoch = Some(u32::from_be_bytes(value.try_into().ok()?))
+                }
                 0x05 => roster = Some(value.to_vec()),
                 0x06 if value.len() == 32 => creator = Some(value.to_vec()),
                 0x07 if value.len() == 64 => signature = Some(value.to_vec()),
@@ -263,8 +272,13 @@ impl GroupStatePayload {
         let Some(roster) = GroupRosterCoding::encode(&self.members) else {
             return false;
         };
-        let content = Self::signing_content(&self.group_id, self.epoch, &self.key, &roster, &self.name);
-        let Some(creator) = self.members.iter().find(|m| m.fingerprint == self.creator_fingerprint) else {
+        let content =
+            Self::signing_content(&self.group_id, self.epoch, &self.key, &roster, &self.name);
+        let Some(creator) = self
+            .members
+            .iter()
+            .find(|m| m.fingerprint == self.creator_fingerprint)
+        else {
             return false;
         };
         let Ok(key): Result<[u8; 32], _> = creator.signing_key.clone().try_into() else {
@@ -290,7 +304,10 @@ pub struct GroupMessageEnvelope {
 
 impl GroupMessageEnvelope {
     pub fn encode(&self) -> Option<Vec<u8>> {
-        if self.group_id.len() != GROUP_ID_LENGTH || self.nonce.len() != 12 || self.ciphertext.is_empty() {
+        if self.group_id.len() != GROUP_ID_LENGTH
+            || self.nonce.len() != 12
+            || self.ciphertext.is_empty()
+        {
             return None;
         }
         let mut out = Vec::new();
@@ -310,7 +327,9 @@ impl GroupMessageEnvelope {
         while let Some((tag, value)) = reader.next_record() {
             match tag {
                 0x01 if value.len() == GROUP_ID_LENGTH => group_id = Some(value.to_vec()),
-                0x02 if value.len() == 4 => epoch = Some(u32::from_be_bytes(value.try_into().ok()?)),
+                0x02 if value.len() == 4 => {
+                    epoch = Some(u32::from_be_bytes(value.try_into().ok()?))
+                }
                 0x03 if value.len() == 12 => nonce = Some(value.to_vec()),
                 0x04 if !value.is_empty() => ciphertext = Some(value.to_vec()),
                 _ => {}
@@ -416,7 +435,10 @@ impl GroupCrypto {
         let ct = cipher
             .encrypt(
                 Nonce::from_slice(&nonce_bytes),
-                Payload { msg: &inner, aad: &aad },
+                Payload {
+                    msg: &inner,
+                    aad: &aad,
+                },
             )
             .map_err(|_| GroupCryptoError::SealFailed)?;
 
@@ -493,7 +515,11 @@ impl GroupCrypto {
             Ok(k) => k,
             Err(_) => return Err(GroupCryptoError::MalformedPayload),
         };
-        if !crate::identity::CypherIdentity::verify(&plaintext.signature, &signing_content, &key_arr) {
+        if !crate::identity::CypherIdentity::verify(
+            &plaintext.signature,
+            &signing_content,
+            &key_arr,
+        ) {
             return Err(GroupCryptoError::BadSenderSignature);
         }
         Ok(plaintext)
@@ -544,7 +570,8 @@ mod tests {
         let other = CypherIdentity::generate();
         let group = sample_group(&creator, &other);
         let key = [0x33u8; 32];
-        let state = GroupStatePayload::make_signed(&group, &key, &|d| creator.sign(d).to_vec()).unwrap();
+        let state =
+            GroupStatePayload::make_signed(&group, &key, &|d| creator.sign(d).to_vec()).unwrap();
         assert!(state.verify_creator_signature());
         let encoded = state.encode().unwrap();
         let decoded = GroupStatePayload::decode(&encoded).unwrap();

@@ -77,9 +77,7 @@ fn noise_xx_golden_vectors() {
             "vector {vi} handshake msg 0 mismatch"
         );
 
-        let m1_payload = responder
-            .read_message(&m0)
-            .expect("responder reads msg 0");
+        let m1_payload = responder.read_message(&m0).expect("responder reads msg 0");
         assert_eq!(
             cypher_core::util::hex_encode(&m1_payload),
             v.messages[0].payload,
@@ -94,9 +92,7 @@ fn noise_xx_golden_vectors() {
             "vector {vi} handshake msg 1 mismatch"
         );
 
-        let m2_payload = initiator
-            .read_message(&m1)
-            .expect("initiator reads msg 1");
+        let m2_payload = initiator.read_message(&m1).expect("initiator reads msg 1");
         assert_eq!(
             cypher_core::util::hex_encode(&m2_payload),
             v.messages[1].payload,
@@ -110,9 +106,7 @@ fn noise_xx_golden_vectors() {
             v.messages[2].ciphertext,
             "vector {vi} handshake msg 2 mismatch"
         );
-        let m2_out_payload = responder
-            .read_message(&m2)
-            .expect("responder reads msg 2");
+        let m2_out_payload = responder.read_message(&m2).expect("responder reads msg 2");
         assert_eq!(
             cypher_core::util::hex_encode(&m2_out_payload),
             v.messages[2].payload,
@@ -172,7 +166,13 @@ fn xx_message_sizes_match_bitchat() {
     // With empty payloads: 32 / 96 / 64 bytes (bitchat's constants).
     let alice = StaticSecret::from([0xA1; 32]);
     let bob = StaticSecret::from([0xB2; 32]);
-    let mut i = HandshakeState::new(NoiseRole::Initiator, NoisePattern::Xx, Some(alice), None, &[]);
+    let mut i = HandshakeState::new(
+        NoiseRole::Initiator,
+        NoisePattern::Xx,
+        Some(alice),
+        None,
+        &[],
+    );
     let mut r = HandshakeState::new(NoiseRole::Responder, NoisePattern::Xx, Some(bob), None, &[]);
     let m1 = i.write_message(&[]).unwrap();
     assert_eq!(m1.len(), cypher_core::consts::NOISE_XX_INITIAL_MESSAGE_SIZE);
@@ -189,7 +189,13 @@ fn xx_message_sizes_match_bitchat() {
 fn tampered_handshake_fails_closed() {
     let alice = StaticSecret::from([0xA1; 32]);
     let bob = StaticSecret::from([0xB2; 32]);
-    let mut i = HandshakeState::new(NoiseRole::Initiator, NoisePattern::Xx, Some(alice), None, &[]);
+    let mut i = HandshakeState::new(
+        NoiseRole::Initiator,
+        NoisePattern::Xx,
+        Some(alice),
+        None,
+        &[],
+    );
     let mut r = HandshakeState::new(NoiseRole::Responder, NoisePattern::Xx, Some(bob), None, &[]);
 
     // Message 1 is unauthenticated by design (bare ephemeral): a corrupted
@@ -209,7 +215,13 @@ fn tampered_handshake_fails_closed() {
 
     // A blacklisted (low-order) ephemeral in message 1 is rejected outright.
     let bob2 = StaticSecret::from([0xB2; 32]);
-    let mut r2 = HandshakeState::new(NoiseRole::Responder, NoisePattern::Xx, Some(bob2), None, &[]);
+    let mut r2 = HandshakeState::new(
+        NoiseRole::Responder,
+        NoisePattern::Xx,
+        Some(bob2),
+        None,
+        &[],
+    );
     let mut evil = m1.clone();
     evil[..32].copy_from_slice(&[0xFF; 32]);
     assert!(matches!(

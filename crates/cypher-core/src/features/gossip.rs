@@ -37,7 +37,12 @@ impl PacketStore {
     }
 
     /// Insert newest-first; reject duplicates and out-of-window timestamps.
-    pub fn insert(&mut self, packet: &crate::packet::BitchatPacket, max_age_ms: u64, now_ms: u64) -> Option<[u8; 16]> {
+    pub fn insert(
+        &mut self,
+        packet: &crate::packet::BitchatPacket,
+        max_age_ms: u64,
+        now_ms: u64,
+    ) -> Option<[u8; 16]> {
         // Freshness: never store future-dated or stale packets.
         if packet.timestamp > now_ms + crate::consts::BLE_MAX_TIMESTAMP_SKEW_MS {
             return None;
@@ -45,7 +50,12 @@ impl PacketStore {
         if now_ms.saturating_sub(packet.timestamp) > max_age_ms {
             return None;
         }
-        let id = PacketIdUtil::packet_id(packet.packet_type, &packet.sender_id, packet.timestamp, &packet.payload);
+        let id = PacketIdUtil::packet_id(
+            packet.packet_type,
+            &packet.sender_id,
+            packet.timestamp,
+            &packet.payload,
+        );
         if self.packets.iter().any(|p| p.packet_id == id) {
             return None;
         }
@@ -64,7 +74,9 @@ impl PacketStore {
             .partition_point(|p| p.timestamp_ms >= stored.timestamp_ms);
         self.packets.insert(position, stored);
         // Evict oldest (tail) past capacity or byte budget.
-        while self.packets.len() > self.capacity || (self.bytes > self.byte_budget && self.packets.len() > 1) {
+        while self.packets.len() > self.capacity
+            || (self.bytes > self.byte_budget && self.packets.len() > 1)
+        {
             if let Some(removed) = self.packets.pop() {
                 self.bytes = self.bytes.saturating_sub(removed.packet.len());
             }
@@ -168,7 +180,8 @@ impl RequestSyncManager {
     }
 
     pub fn record_request(&mut self, peer: &crate::PeerId, now_ms: u64) {
-        self.pending.insert(peer.short().as_str().to_string(), now_ms);
+        self.pending
+            .insert(peer.short().as_str().to_string(), now_ms);
     }
 
     /// A response (RSR-flagged packet) is valid only from a peer with an
@@ -190,7 +203,8 @@ impl RequestSyncManager {
 
     pub fn cleanup(&mut self, now_ms: u64) {
         let window = crate::consts::SYNC_RESPONSE_WINDOW_S * 1000;
-        self.pending.retain(|_, t| now_ms.saturating_sub(*t) <= window);
+        self.pending
+            .retain(|_, t| now_ms.saturating_sub(*t) <= window);
     }
 }
 
@@ -235,13 +249,22 @@ impl GossipSyncManager {
 
     pub fn with_clock(now_ms: Box<dyn Fn() -> u64 + Send + Sync>) -> Self {
         GossipSyncManager {
-            messages: PacketStore::new(crate::consts::SYNC_STORE_MESSAGES, crate::consts::SYNC_STORE_MESSAGES_BYTES),
+            messages: PacketStore::new(
+                crate::consts::SYNC_STORE_MESSAGES,
+                crate::consts::SYNC_STORE_MESSAGES_BYTES,
+            ),
             group_messages: PacketStore::new(
                 crate::consts::SYNC_STORE_GROUP_MESSAGES,
                 crate::consts::SYNC_STORE_GROUP_MESSAGES_BYTES,
             ),
-            fragments: PacketStore::new(crate::consts::SYNC_STORE_FRAGMENTS, crate::consts::SYNC_STORE_FRAGMENTS_BYTES),
-            files: PacketStore::new(crate::consts::SYNC_STORE_FILES, crate::consts::SYNC_STORE_FILES_BYTES),
+            fragments: PacketStore::new(
+                crate::consts::SYNC_STORE_FRAGMENTS,
+                crate::consts::SYNC_STORE_FRAGMENTS_BYTES,
+            ),
+            files: PacketStore::new(
+                crate::consts::SYNC_STORE_FILES,
+                crate::consts::SYNC_STORE_FILES_BYTES,
+            ),
             prekeys: PacketStore::new(crate::consts::SYNC_STORE_PREKEYS, 1024 * 1024),
             board: PacketStore::new(200, 1024 * 1024),
             request_manager: RequestSyncManager::new(),
@@ -289,7 +312,8 @@ impl GossipSyncManager {
             _ => return,
         };
         let now = self.now();
-        self.store_mut(class).insert(packet, class.max_age_ms(), now);
+        self.store_mut(class)
+            .insert(packet, class.max_age_ms(), now);
     }
 
     /// Is a sync round due for any store class?
@@ -332,7 +356,8 @@ impl GossipSyncManager {
             return None;
         }
         let p = GcsFilter::derive_p(crate::consts::SYNC_TARGET_FPR);
-        let (data, m, included) = GcsFilter::build_filter(&ids, p, crate::consts::SYNC_GCS_MAX_BYTES);
+        let (data, m, included) =
+            GcsFilter::build_filter(&ids, p, crate::consts::SYNC_GCS_MAX_BYTES);
         // The exact cursor: the newest-prefix coverage boundary.
         // The exact cursor: the oldest timestamp still covered by the
         // trimmed filter (each store contributes its newest-prefix share).
@@ -362,7 +387,11 @@ impl GossipSyncManager {
 
     /// Serve a request: packets the requester is missing, ready for directed
     /// RSR-flagged re-sends. Rate limited per peer.
-    pub fn serve_request(&mut self, peer: &crate::PeerId, request: &RequestSyncPacket) -> Option<Vec<Vec<u8>>> {
+    pub fn serve_request(
+        &mut self,
+        peer: &crate::PeerId,
+        request: &RequestSyncPacket,
+    ) -> Option<Vec<Vec<u8>>> {
         let now = self.now();
         if !self.response_limiter.allow(peer, now) {
             return None;
@@ -397,7 +426,14 @@ mod tests {
     use crate::packet::BitchatPacket;
 
     fn broadcast(t: MessageType, timestamp_ms: u64, payload: Vec<u8>) -> BitchatPacket {
-        let mut p = BitchatPacket::new(t.as_u8(), [1, 2, 3, 4, 5, 6, 7, 8], None, timestamp_ms, payload, 7);
+        let mut p = BitchatPacket::new(
+            t.as_u8(),
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            None,
+            timestamp_ms,
+            payload,
+            7,
+        );
         p.signature = Some([9; 64]);
         p
     }
@@ -407,7 +443,10 @@ mod tests {
         let mut store = PacketStore::new(10, 1024 * 1024);
         let p = broadcast(MessageType::Message, 1000, b"hello".to_vec());
         assert!(store.insert(&p, 900_000, 2000).is_some());
-        assert!(store.insert(&p, 900_000, 2000).is_none(), "duplicate rejected");
+        assert!(
+            store.insert(&p, 900_000, 2000).is_none(),
+            "duplicate rejected"
+        );
         // Stale packet rejected (age strictly beyond the window).
         let old = broadcast(MessageType::Message, 0, b"old".to_vec());
         assert!(store.insert(&old, 900_000, 900_001).is_none());
@@ -421,11 +460,17 @@ mod tests {
         // Alice holds every 5th message (10 of 50); Bob holds all 50.
         let clock = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(10_000));
         let c2 = clock.clone();
-        let mut a = GossipSyncManager::with_clock(Box::new(move || c2.load(std::sync::atomic::Ordering::SeqCst)));
+        let mut a = GossipSyncManager::with_clock(Box::new(move || {
+            c2.load(std::sync::atomic::Ordering::SeqCst)
+        }));
 
         for i in 0..50u64 {
             if i % 5 == 0 {
-                let p = broadcast(MessageType::Message, 10_000 - i, format!("msg-{i}").into_bytes());
+                let p = broadcast(
+                    MessageType::Message,
+                    10_000 - i,
+                    format!("msg-{i}").into_bytes(),
+                );
                 a.observe(&p);
             }
         }
@@ -438,7 +483,11 @@ mod tests {
         // Bob serves the diff: the ~40 messages Alice lacks.
         let mut b = GossipSyncManager::with_clock(Box::new(|| 10_000));
         for i in 0..50u64 {
-            let p = broadcast(MessageType::Message, 10_000 - i, format!("msg-{i}").into_bytes());
+            let p = broadcast(
+                MessageType::Message,
+                10_000 - i,
+                format!("msg-{i}").into_bytes(),
+            );
             b.observe(&p);
         }
         let alice_peer = crate::PeerId::new("00a1");
@@ -452,7 +501,10 @@ mod tests {
         for _ in 0..7 {
             assert!(b.serve_request(&alice_peer, &request).is_some());
         }
-        assert!(b.serve_request(&alice_peer, &request).is_none(), "rate limited");
+        assert!(
+            b.serve_request(&alice_peer, &request).is_none(),
+            "rate limited"
+        );
     }
 
     #[test]

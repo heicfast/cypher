@@ -22,7 +22,12 @@ pub struct RelayDecision {
 
 /// Decide the relay fate of `packet` received from `ingress_peer`, with the
 /// local degree (connected peer count).
-pub fn decide(packet: &BitchatPacket, ingress_peer: &crate::PeerId, local_peer: &crate::PeerId, degree: usize) -> RelayDecision {
+pub fn decide(
+    packet: &BitchatPacket,
+    ingress_peer: &crate::PeerId,
+    local_peer: &crate::PeerId,
+    degree: usize,
+) -> RelayDecision {
     let no_relay = RelayDecision {
         should_relay: false,
         new_ttl: 0,
@@ -64,7 +69,8 @@ pub fn decide(packet: &BitchatPacket, ingress_peer: &crate::PeerId, local_peer: 
             | Some(MessageType::Ping)
             | Some(MessageType::Pong)
     ) && packet.recipient_id.is_some();
-    let is_directed_fragment = packet_type == MessageType::Fragment.as_u8() && packet.recipient_id.is_some();
+    let is_directed_fragment =
+        packet_type == MessageType::Fragment.as_u8() && packet.recipient_id.is_some();
 
     if is_handshake {
         return RelayDecision {
@@ -84,8 +90,14 @@ pub fn decide(packet: &BitchatPacket, ingress_peer: &crate::PeerId, local_peer: 
     }
 
     // Fragments and voice: dense graphs cap TTL at 5, sparse at 7.
-    if packet_type == MessageType::Fragment.as_u8() || packet_type == MessageType::VoiceFrame.as_u8() {
-        let cap = if dense { 5u8.min(ttl_cap) } else { 7u8.min(ttl_cap) };
+    if packet_type == MessageType::Fragment.as_u8()
+        || packet_type == MessageType::VoiceFrame.as_u8()
+    {
+        let cap = if dense {
+            5u8.min(ttl_cap)
+        } else {
+            7u8.min(ttl_cap)
+        };
         if cap <= 1 {
             return no_relay;
         }
@@ -147,14 +159,24 @@ mod tests {
     #[test]
     fn request_sync_never_relays() {
         let local = crate::PeerId::new("aa");
-        let d = decide(&pkt(MessageType::RequestSync, 7, None), &local.clone(), &local, 3);
+        let d = decide(
+            &pkt(MessageType::RequestSync, 7, None),
+            &local.clone(),
+            &local,
+            3,
+        );
         assert!(!d.should_relay);
     }
 
     #[test]
     fn handshake_always_relays_ttl_minus_one() {
         let local = crate::PeerId::new("aa");
-        let d = decide(&pkt(MessageType::NoiseHandshake, 7, Some([0x22; 8])), &local.clone(), &local, 3);
+        let d = decide(
+            &pkt(MessageType::NoiseHandshake, 7, Some([0x22; 8])),
+            &local.clone(),
+            &local,
+            3,
+        );
         assert!(d.should_relay);
         assert_eq!(d.new_ttl, 6);
         assert_eq!((d.jitter_min_ms, d.jitter_max_ms), (10, 35));
@@ -163,7 +185,12 @@ mod tests {
     #[test]
     fn ttl_one_not_relaid() {
         let local = crate::PeerId::new("aa");
-        let d = decide(&pkt(MessageType::Message, 1, None), &local.clone(), &local, 3);
+        let d = decide(
+            &pkt(MessageType::Message, 1, None),
+            &local.clone(),
+            &local,
+            3,
+        );
         assert!(!d.should_relay);
     }
 
@@ -188,23 +215,48 @@ mod tests {
     #[test]
     fn broadcast_tightened_when_dense() {
         let local = crate::PeerId::new("aa");
-        let dense = decide(&pkt(MessageType::Message, 7, None), &local.clone(), &local, 8);
+        let dense = decide(
+            &pkt(MessageType::Message, 7, None),
+            &local.clone(),
+            &local,
+            8,
+        );
         assert!(dense.should_relay);
         assert_eq!(dense.new_ttl, 4); // cap 5, minus one hop
-        let sparse = decide(&pkt(MessageType::Message, 7, None), &local.clone(), &local, 1);
+        let sparse = decide(
+            &pkt(MessageType::Message, 7, None),
+            &local.clone(),
+            &local,
+            1,
+        );
         assert!(sparse.should_relay);
         assert_eq!(sparse.new_ttl, 6); // preferred 6, minus one hop
-        // Announces get announce-class headroom (7 → 6) in mid-density graphs.
-        let mid = decide(&pkt(MessageType::Announce, 7, None), &local.clone(), &local, 4);
+                                       // Announces get announce-class headroom (7 → 6) in mid-density graphs.
+        let mid = decide(
+            &pkt(MessageType::Announce, 7, None),
+            &local.clone(),
+            &local,
+            4,
+        );
         assert_eq!(mid.new_ttl, 6);
     }
 
     #[test]
     fn fragment_dense_cap_five() {
         let local = crate::PeerId::new("aa");
-        let dense = decide(&pkt(MessageType::Fragment, 7, None), &local.clone(), &local, 9);
+        let dense = decide(
+            &pkt(MessageType::Fragment, 7, None),
+            &local.clone(),
+            &local,
+            9,
+        );
         assert_eq!(dense.new_ttl, 4); // cap 5 − 1
-        let sparse = decide(&pkt(MessageType::Fragment, 7, None), &local.clone(), &local, 2);
+        let sparse = decide(
+            &pkt(MessageType::Fragment, 7, None),
+            &local.clone(),
+            &local,
+            2,
+        );
         assert_eq!(sparse.new_ttl, 6); // cap 7 − 1
     }
 }

@@ -126,7 +126,11 @@ impl CipherState {
 
     // ---- AEAD -------------------------------------------------------------
 
-    pub fn encrypt(&mut self, plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, NoiseError> {
+    pub fn encrypt(
+        &mut self,
+        plaintext: &[u8],
+        associated_data: &[u8],
+    ) -> Result<Vec<u8>, NoiseError> {
         let key = self.key.ok_or(NoiseError::UninitializedCipher)?;
         let current_nonce = self.nonce;
         if current_nonce > NONCE_CEILING {
@@ -154,18 +158,28 @@ impl CipherState {
         }
     }
 
-    pub fn decrypt(&mut self, ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, NoiseError> {
+    pub fn decrypt(
+        &mut self,
+        ciphertext: &[u8],
+        associated_data: &[u8],
+    ) -> Result<Vec<u8>, NoiseError> {
         let key = self.key.ok_or(NoiseError::UninitializedCipher)?;
         if ciphertext.len() < 16 {
             return Err(NoiseError::InvalidCiphertext);
         }
 
-        let (encrypted, tag, wire_nonce): (&[u8], &[u8], Option<u64>) = if self.use_extracted_nonce {
+        let (encrypted, tag, wire_nonce): (&[u8], &[u8], Option<u64>) = if self.use_extracted_nonce
+        {
             if ciphertext.len() < NONCE_SIZE_BYTES {
                 return Err(NoiseError::InvalidCiphertext);
             }
             let (nonce_bytes, rest) = ciphertext.split_at(NONCE_SIZE_BYTES);
-            let extracted = u32::from_be_bytes([nonce_bytes[0], nonce_bytes[1], nonce_bytes[2], nonce_bytes[3]]) as u64;
+            let extracted = u32::from_be_bytes([
+                nonce_bytes[0],
+                nonce_bytes[1],
+                nonce_bytes[2],
+                nonce_bytes[3],
+            ]) as u64;
             if !self.is_valid_nonce(extracted) {
                 return Err(NoiseError::ReplayDetected);
             }
@@ -276,7 +290,9 @@ mod tests {
     fn out_of_order_within_window_accepted() {
         // Encrypt nonces 0..5; deliver 3, then 0, then 5 — all valid (skips allowed).
         let mut c = CipherState::with_key(key(), true);
-        let cts: Vec<Vec<u8>> = (0..5u64).map(|i| c.encrypt(&[i as u8], b"").unwrap()).collect();
+        let cts: Vec<Vec<u8>> = (0..5u64)
+            .map(|i| c.encrypt(&[i as u8], b"").unwrap())
+            .collect();
         let mut d = CipherState::with_key(key(), true);
         assert!(d.decrypt(&cts[3], b"").is_ok());
         assert!(d.decrypt(&cts[0], b"").is_ok());

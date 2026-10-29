@@ -105,7 +105,11 @@ impl StreamAssembler {
             }
 
             let version = self.buffer[0];
-            let header_size = if version == 2 { V2_HEADER_SIZE } else { V1_HEADER_SIZE };
+            let header_size = if version == 2 {
+                V2_HEADER_SIZE
+            } else {
+                V1_HEADER_SIZE
+            };
             if self.buffer.len() < header_size + PEER_ID_WIRE_BYTES {
                 return Ok(None); // need more bytes
             }
@@ -212,14 +216,7 @@ mod tests {
     #[test]
     fn padded_frames_extracted() {
         let mut asm = StreamAssembler::new();
-        let mut pkt = crate::packet::BitchatPacket::new(
-            0x11,
-            [1; 8],
-            None,
-            42,
-            vec![0x33; 64],
-            7,
-        );
+        let mut pkt = crate::packet::BitchatPacket::new(0x11, [1; 8], None, 42, vec![0x33; 64], 7);
         // Wire with padding (noise frames are padded).
         let padded = pkt.to_binary_data(true).unwrap();
         let mut stream = padded.clone();

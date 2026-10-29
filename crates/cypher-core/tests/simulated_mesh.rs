@@ -64,7 +64,9 @@ impl World {
     fn bring_up(&mut self) {
         // Radios on.
         for node in [&mut self.alice, &mut self.bob] {
-            let out = node.engine.handle(LinkEvent::RadioStateChanged(RadioState::PoweredOn));
+            let out = node
+                .engine
+                .handle(LinkEvent::RadioStateChanged(RadioState::PoweredOn));
             node.events.extend(out.events);
         }
         // Links up (each node's engine sees its own link id 1).
@@ -104,14 +106,10 @@ impl World {
                     bytes,
                 });
                 self.bob.events.extend(out.events);
-                to_alice.extend(
-                    out.commands
-                        .into_iter()
-                        .filter_map(|c| match c {
-                            LinkCommand::Write { bytes, .. } => Some(bytes),
-                            _ => None,
-                        }),
-                );
+                to_alice.extend(out.commands.into_iter().filter_map(|c| match c {
+                    LinkCommand::Write { bytes, .. } => Some(bytes),
+                    _ => None,
+                }));
             }
             if to_alice.is_empty() {
                 break;
@@ -124,14 +122,10 @@ impl World {
                     bytes,
                 });
                 self.alice.events.extend(out.events);
-                back.extend(
-                    out.commands
-                        .into_iter()
-                        .filter_map(|c| match c {
-                            LinkCommand::Write { bytes, .. } => Some(bytes),
-                            _ => None,
-                        }),
-                );
+                back.extend(out.commands.into_iter().filter_map(|c| match c {
+                    LinkCommand::Write { bytes, .. } => Some(bytes),
+                    _ => None,
+                }));
             }
             to_bob = back;
         }
@@ -158,14 +152,10 @@ impl World {
                     bytes,
                 });
                 self.alice.events.extend(out.events);
-                to_bob.extend(
-                    out.commands
-                        .into_iter()
-                        .filter_map(|c| match c {
-                            LinkCommand::Write { bytes, .. } => Some(bytes),
-                            _ => None,
-                        }),
-                );
+                to_bob.extend(out.commands.into_iter().filter_map(|c| match c {
+                    LinkCommand::Write { bytes, .. } => Some(bytes),
+                    _ => None,
+                }));
             }
             if to_bob.is_empty() {
                 break;
@@ -178,14 +168,10 @@ impl World {
                     bytes,
                 });
                 self.bob.events.extend(out.events);
-                back.extend(
-                    out.commands
-                        .into_iter()
-                        .filter_map(|c| match c {
-                            LinkCommand::Write { bytes, .. } => Some(bytes),
-                            _ => None,
-                        }),
-                );
+                back.extend(out.commands.into_iter().filter_map(|c| match c {
+                    LinkCommand::Write { bytes, .. } => Some(bytes),
+                    _ => None,
+                }));
             }
             to_alice = back;
         }
@@ -265,10 +251,11 @@ fn noise_session_establishes_and_private_message_delivers() {
     world.settle(4);
 
     // Alice sends a private message (handshake rides the same link).
-    let out = world
-        .alice
-        .engine
-        .send_private_message(&world.bob.engine.local_peer_id(), "the camp moved north", "dm-1");
+    let out = world.alice.engine.send_private_message(
+        &world.bob.engine.local_peer_id(),
+        "the camp moved north",
+        "dm-1",
+    );
     world.alice_sends(out);
     world.settle(8);
 
@@ -287,10 +274,11 @@ fn noise_session_establishes_and_private_message_delivers() {
     );
 
     // Round trip: Bob replies over the established session.
-    let out = world
-        .bob
-        .engine
-        .send_private_message(&world.alice.engine.local_peer_id(), "copy that", "dm-2");
+    let out = world.bob.engine.send_private_message(
+        &world.alice.engine.local_peer_id(),
+        "copy that",
+        "dm-2",
+    );
     world.bob_sends(out);
     assert!(
         count(&world.alice, is_noise_payload) >= 1,
@@ -309,7 +297,11 @@ fn public_message_broadcast_delivers_once() {
     world.alice_sends(out);
 
     // Bob delivers exactly once.
-    assert_eq!(count(&world.bob, is_public_message), 1, "delivered exactly once");
+    assert_eq!(
+        count(&world.bob, is_public_message),
+        1,
+        "delivered exactly once"
+    );
 
     // Bob relays it back (echo): Alice must NOT re-deliver her own broadcast.
     world.settle(4);
@@ -321,7 +313,11 @@ fn public_message_broadcast_delivers_once() {
 
     // A duplicate injection of the same wire bytes is suppressed.
     world.deliver_alice_to_bob(&commands);
-    assert_eq!(count(&world.bob, is_public_message), 1, "duplicates suppressed");
+    assert_eq!(
+        count(&world.bob, is_public_message),
+        1,
+        "duplicates suppressed"
+    );
 
     // Different content is a new message.
     let out = world.alice.engine.send_public_message("hello again", &[]);
@@ -352,5 +348,9 @@ fn mesh_ping_measures_rtt() {
         })
         .collect();
     assert_eq!(rtts.len(), 1, "exactly one ping result");
-    assert!(rtts[0] < 500, "rtt within the simulated window, got {}", rtts[0]);
+    assert!(
+        rtts[0] < 500,
+        "rtt within the simulated window, got {}",
+        rtts[0]
+    );
 }

@@ -242,8 +242,7 @@ pub const FILE_MAX_PAYLOAD_BYTES: usize = 1024 * 1024; // 1 MiB
 pub const FILE_MAX_VOICE_BYTES: usize = 512 * 1024;
 pub const FILE_MAX_IMAGE_BYTES: usize = 512 * 1024;
 /// 1 MiB + TLV envelope (18 + 2*65535) + binary envelope overhead.
-pub const FILE_MAX_FRAMED_BYTES: usize =
-    1024 * 1024 + 18 + 2 * 65535 + 16 + 8 + 8 + 64;
+pub const FILE_MAX_FRAMED_BYTES: usize = 1024 * 1024 + 18 + 2 * 65535 + 16 + 8 + 8 + 64;
 
 // ---------------------------------------------------------------------------
 // Push-to-talk voice

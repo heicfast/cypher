@@ -43,7 +43,7 @@ fn append_length_prefixed(out: &mut Vec<u8>, value: &[u8]) {
 }
 
 /// A signed, persistent bulletin-board notice.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct BoardPostPacket {
     pub post_id: Vec<u8>,
     /// Empty string scopes the post to the mesh-local board.
@@ -83,7 +83,7 @@ impl BoardPostPacket {
 }
 
 /// Author-signed deletion marker; retained until the deleted post's expiry.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct BoardTombstonePacket {
     pub post_id: Vec<u8>,
     pub deleted_at: u64,
@@ -109,7 +109,7 @@ impl BoardTombstonePacket {
 }
 
 /// Decoded board payload: either a live post or a tombstone.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum BoardWire {
     Post(BoardPostPacket),
     Tombstone(BoardTombstonePacket),
@@ -180,13 +180,21 @@ impl BoardWire {
                 0x02 if value.len() == 16 => post_id = Some(value.to_vec()),
                 0x03 => geohash = String::from_utf8(value.to_vec()).ok(),
                 0x04 => content = String::from_utf8(value.to_vec()).ok(),
-                0x05 if value.len() == SIGNING_KEY_LENGTH => author_signing_key = Some(value.to_vec()),
+                0x05 if value.len() == SIGNING_KEY_LENGTH => {
+                    author_signing_key = Some(value.to_vec())
+                }
                 0x06 => author_nickname = String::from_utf8(value.to_vec()).ok(),
-                0x07 if value.len() == 8 => created_at = Some(u64::from_be_bytes(value.try_into().ok()?)),
-                0x08 if value.len() == 8 => expires_at = Some(u64::from_be_bytes(value.try_into().ok()?)),
+                0x07 if value.len() == 8 => {
+                    created_at = Some(u64::from_be_bytes(value.try_into().ok()?))
+                }
+                0x08 if value.len() == 8 => {
+                    expires_at = Some(u64::from_be_bytes(value.try_into().ok()?))
+                }
                 0x09 if value.len() == 1 => flags = Some(value[0]),
                 0x0A if value.len() == SIGNATURE_LENGTH => signature = Some(value.to_vec()),
-                0x0B if value.len() == 8 => deleted_at = Some(u64::from_be_bytes(value.try_into().ok()?)),
+                0x0B if value.len() == 8 => {
+                    deleted_at = Some(u64::from_be_bytes(value.try_into().ok()?))
+                }
                 _ => {}
             }
         }

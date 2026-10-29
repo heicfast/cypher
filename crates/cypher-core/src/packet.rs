@@ -221,11 +221,19 @@ impl BinaryProtocol {
         }
 
         let header_size = Self::header_size(version)?;
-        let estimated_signature = if packet.signature.is_some() { SIGNATURE_SIZE } else { 0 };
+        let estimated_signature = if packet.signature.is_some() {
+            SIGNATURE_SIZE
+        } else {
+            0
+        };
         let mut data = Vec::with_capacity(
             header_size
                 + SENDER_ID_SIZE
-                + if packet.recipient_id.is_some() { RECIPIENT_ID_SIZE } else { 0 }
+                + if packet.recipient_id.is_some() {
+                    RECIPIENT_ID_SIZE
+                } else {
+                    0
+                }
                 + route_length
                 + payload_data_size
                 + estimated_signature
@@ -393,8 +401,7 @@ impl BinaryProtocol {
             if original_size > compressed_size.saturating_mul(limits::MAX_DEFLATE_RATIO) {
                 return None;
             }
-            let decompressed =
-                compression::decompress(&compressed, original_size, max_payload)?;
+            let decompressed = compression::decompress(&compressed, original_size, max_payload)?;
             let wire = WirePayload {
                 bytes: compressed,
                 compressed: true,
@@ -463,7 +470,10 @@ mod tests {
         assert_eq!(pkt.packet_type, 0x04);
         assert_eq!(pkt.ttl, 7);
         assert_eq!(pkt.timestamp, 1_750_000_000_000);
-        assert_eq!(pkt.sender_id, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+        assert_eq!(
+            pkt.sender_id,
+            [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]
+        );
         assert_eq!(
             pkt.recipient_id,
             Some([0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00])

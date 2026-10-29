@@ -5,9 +5,9 @@
 use x25519_dalek::StaticSecret;
 
 use super::cipher::CipherState;
-use super::handshake::{HandshakeState, NoisePattern, NoiseRole};
 #[cfg(test)]
 use super::handshake::public_bytes;
+use super::handshake::{HandshakeState, NoisePattern, NoiseRole};
 use super::NoiseError;
 use crate::consts;
 
@@ -43,7 +43,12 @@ pub struct NoiseSession {
 
 impl NoiseSession {
     pub fn new(peer_id: crate::PeerId, role: NoiseRole, local_static_key: StaticSecret) -> Self {
-        Self::with_clock(peer_id, role, local_static_key, Box::new(crate::util::now_ms))
+        Self::with_clock(
+            peer_id,
+            role,
+            local_static_key,
+            Box::new(crate::util::now_ms),
+        )
     }
 
     pub fn with_clock(
@@ -102,7 +107,10 @@ impl NoiseSession {
 
     /// Process an incoming handshake message. Returns the response to send
     /// (if any). On completion the session transitions to established.
-    pub fn process_handshake_message(&mut self, message: &[u8]) -> Result<Option<Vec<u8>>, NoiseError> {
+    pub fn process_handshake_message(
+        &mut self,
+        message: &[u8],
+    ) -> Result<Option<Vec<u8>>, NoiseError> {
         if self.state == NoiseSessionState::Uninitialized && self.role == NoiseRole::Responder {
             let hs = HandshakeState::new(
                 self.role,
@@ -118,7 +126,10 @@ impl NoiseSession {
         if self.state != NoiseSessionState::Handshaking {
             return Err(NoiseError::InvalidState);
         }
-        let mut handshake = self.handshake_state.take().ok_or(NoiseError::InvalidState)?;
+        let mut handshake = self
+            .handshake_state
+            .take()
+            .ok_or(NoiseError::InvalidState)?;
 
         handshake.read_message(message)?;
 
@@ -178,7 +189,10 @@ impl NoiseSession {
             return Err(NoiseError::MessageTooLarge);
         }
 
-        let cipher = self.send_cipher.as_mut().ok_or(NoiseError::NotEstablished)?;
+        let cipher = self
+            .send_cipher
+            .as_mut()
+            .ok_or(NoiseError::NotEstablished)?;
         let encrypted = cipher.encrypt(plaintext, &[])?; // transport AD is empty
         self.message_count += 1;
         self.last_activity_ms = self.now();
@@ -193,12 +207,16 @@ impl NoiseSession {
         if age_s > consts::NOISE_SESSION_TIMEOUT_S {
             return Err(NoiseError::SessionExpired);
         }
-        let valid_size = ciphertext.len() <= consts::NOISE_MAX_MESSAGE_SIZE + consts::NOISE_TRANSPORT_OVERHEAD
+        let valid_size = ciphertext.len()
+            <= consts::NOISE_MAX_MESSAGE_SIZE + consts::NOISE_TRANSPORT_OVERHEAD
             || ciphertext.len() <= consts::NOISE_MAX_PRIVATE_FILE_CIPHERTEXT;
         if !valid_size {
             return Err(NoiseError::MessageTooLarge);
         }
-        let cipher = self.receive_cipher.as_mut().ok_or(NoiseError::NotEstablished)?;
+        let cipher = self
+            .receive_cipher
+            .as_mut()
+            .ok_or(NoiseError::NotEstablished)?;
         let decrypted = cipher.decrypt(ciphertext, &[])?;
         self.last_activity_ms = self.now();
         Ok(decrypted)
@@ -230,8 +248,7 @@ impl NoiseSession {
     /// beyond the session timeout, or 90% of the session age limit.
     pub fn needs_renegotiation(&self) -> bool {
         let now = self.now();
-        let message_threshold =
-            (consts::NOISE_MAX_MESSAGES_PER_SESSION as f64 * 0.9) as u64;
+        let message_threshold = (consts::NOISE_MAX_MESSAGES_PER_SESSION as f64 * 0.9) as u64;
         if self.message_count >= message_threshold {
             return true;
         }

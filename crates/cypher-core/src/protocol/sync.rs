@@ -77,7 +77,12 @@ pub struct PacketIdUtil;
 impl PacketIdUtil {
     /// 16-byte packet ID: `SHA-256(type ‖ senderID ‖ timestamp u64 BE ‖
     /// payload)[0..16]`.
-    pub fn packet_id(packet_type: u8, sender_id: &[u8; 8], timestamp_ms: u64, payload: &[u8]) -> [u8; 16] {
+    pub fn packet_id(
+        packet_type: u8,
+        sender_id: &[u8; 8],
+        timestamp_ms: u64,
+        payload: &[u8],
+    ) -> [u8; 16] {
         use sha2::Digest;
         let mut h = sha2::Sha256::new();
         h.update([packet_type]);
@@ -167,7 +172,11 @@ impl GcsFilter {
     /// Build a bounded filter: newest-first input, tail-trimmed to the byte
     /// budget (binary search on the included count). Returns
     /// `(encoded, m, included_count)`.
-    pub fn build_filter(ids_newest_first: &[[u8; 16]], p: u8, max_bytes: usize) -> (Vec<u8>, u32, usize) {
+    pub fn build_filter(
+        ids_newest_first: &[[u8; 16]],
+        p: u8,
+        max_bytes: usize,
+    ) -> (Vec<u8>, u32, usize) {
         let total = ids_newest_first.len();
         if total == 0 {
             return (Vec::new(), 2, 0);
@@ -398,7 +407,9 @@ mod tests {
     use super::*;
 
     fn ids(n: usize) -> Vec<[u8; 16]> {
-        (0..n).map(|i| sha256(&(i as u64).to_be_bytes())[..16].try_into().unwrap()).collect()
+        (0..n)
+            .map(|i| sha256(&(i as u64).to_be_bytes())[..16].try_into().unwrap())
+            .collect()
     }
 
     fn ids_offset(start: u64, n: usize) -> Vec<[u8; 16]> {
@@ -426,12 +437,21 @@ mod tests {
         let set = ids(100);
         let (encoded, m) = GcsFilter::encode_ids(&set, 7);
         for id in &set {
-            assert!(GcsFilter::might_contain(&encoded, 7, m, id), "member must pass");
+            assert!(
+                GcsFilter::might_contain(&encoded, 7, m, id),
+                "member must pass"
+            );
         }
         // Non-members (disjoint range) pass with ~1% probability.
         let non = ids_offset(100_000, 200);
-        let false_positives = non.iter().filter(|id| GcsFilter::might_contain(&encoded, 7, m, id)).count();
-        assert!(false_positives <= 10, "FPR out of band: {false_positives}/200");
+        let false_positives = non
+            .iter()
+            .filter(|id| GcsFilter::might_contain(&encoded, 7, m, id))
+            .count();
+        assert!(
+            false_positives <= 10,
+            "FPR out of band: {false_positives}/200"
+        );
     }
 
     #[test]
@@ -514,7 +534,10 @@ mod tests {
         assert_eq!(SyncTypeFlags::decode(&flags.encode()), flags);
         // Phantom bits dropped.
         let phantom = SyncTypeFlags(0xFFFF_FFFF_FFFF_FFFF);
-        assert_eq!(SyncTypeFlags::decode(&phantom.encode()), SyncTypeFlags::all());
+        assert_eq!(
+            SyncTypeFlags::decode(&phantom.encode()),
+            SyncTypeFlags::all()
+        );
         assert!(flags.contains(SyncTypeFlags::GROUP_MESSAGE));
         assert!(flags.contains(SyncTypeFlags::BOARD_POST));
         assert!(!flags.contains(1 << 11));

@@ -12,4 +12,7 @@ pub mod stream;
 pub mod topology;
 
 pub use engine::{EngineEvent, EngineOutput, MeshEngine};
-pub use link::{LinkId, LinkId as PeripheralId, LinkCommand, LinkDirection, LinkEvent, RadioState, WritePriority};
+pub use link::{
+    LinkCommand, LinkDirection, LinkEvent, LinkId, LinkId as PeripheralId, RadioState,
+    WritePriority,
+};

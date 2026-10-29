@@ -6,7 +6,7 @@ use crate::util::{hex_encode, sha256};
 /// `privateMessage` (Noise payload 0x01) — TLV with 1-byte lengths:
 /// `0x00 messageID (UTF-8 ≤255)`, `0x01 content (UTF-8 ≤255)`.
 /// Unknown TLV types reject the decode.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct PrivateMessagePacket {
     pub message_id: String,
     pub content: String,

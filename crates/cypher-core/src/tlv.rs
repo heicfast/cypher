@@ -20,12 +20,20 @@ pub struct TlvReader<'a> {
 impl<'a> TlvReader<'a> {
     /// Reader for `[type u8][len u8][value]` records.
     pub fn short(data: &'a [u8]) -> Self {
-        TlvReader { data, pos: 0, len_width: 1 }
+        TlvReader {
+            data,
+            pos: 0,
+            len_width: 1,
+        }
     }
 
     /// Reader for `[type u8][len u16 BE][value]` records.
     pub fn long(data: &'a [u8]) -> Self {
-        TlvReader { data, pos: 0, len_width: 2 }
+        TlvReader {
+            data,
+            pos: 0,
+            len_width: 2,
+        }
     }
 
     pub fn remaining(&self) -> usize {

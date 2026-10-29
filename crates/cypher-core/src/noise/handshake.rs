@@ -36,8 +36,15 @@ impl NoisePattern {
 
     fn message_patterns(&self) -> &'static [&'static [Token]] {
         match self {
-            NoisePattern::Xx => &[&[Token::E], &[Token::E, Token::Ee, Token::S, Token::Es], &[Token::S, Token::Se]],
-            NoisePattern::Ik => &[&[Token::E, Token::Es, Token::S, Token::Ss], &[Token::E, Token::Ee, Token::Se]],
+            NoisePattern::Xx => &[
+                &[Token::E],
+                &[Token::E, Token::Ee, Token::S, Token::Es],
+                &[Token::S, Token::Se],
+            ],
+            NoisePattern::Ik => &[
+                &[Token::E, Token::Es, Token::S, Token::Ss],
+                &[Token::E, Token::Ee, Token::Se],
+            ],
             NoisePattern::Nk => &[&[Token::E, Token::Es], &[Token::E, Token::Ee]],
             NoisePattern::X => &[&[Token::E, Token::Es, Token::S, Token::Ss]],
         }
@@ -63,14 +70,42 @@ enum Token {
 /// Known low-order / invalid Curve25519 points (bitchat's blacklist).
 const LOW_ORDER_POINTS: [&[u8; 32]; 9] = [
     &[0x00; 32],
-    &[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-    &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
-    &[0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00],
-    &[0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef, 0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f, 0x11, 0x57],
+    &[
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
+    ],
+    &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01,
+    ],
+    &[
+        0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4,
+        0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49,
+        0xb8, 0x00,
+    ],
+    &[
+        0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef,
+        0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f,
+        0x11, 0x57,
+    ],
     &[0xFF; 32],
-    &[0xda, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
-    &[0xdb, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
-    &[0xed, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+    &[
+        0xda, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF,
+    ],
+    &[
+        0xdb, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF,
+    ],
+    &[
+        0xed, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF,
+    ],
 ];
 
 /// Validate a received Curve25519 public key: 32 bytes, constant-time
@@ -134,7 +169,14 @@ impl HandshakeState {
         remote_static: Option<[u8; 32]>,
         prologue: &[u8],
     ) -> Self {
-        Self::with_predetermined_ephemeral(role, pattern, local_static, remote_static, prologue, None)
+        Self::with_predetermined_ephemeral(
+            role,
+            pattern,
+            local_static,
+            remote_static,
+            prologue,
+            None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -155,20 +197,18 @@ impl HandshakeState {
         symmetric_state.mix_hash(prologue);
         match pattern {
             NoisePattern::Xx => {}
-            NoisePattern::Ik | NoisePattern::Nk | NoisePattern::X => {
-                match role {
-                    NoiseRole::Initiator => {
-                        if let Some(rs) = remote_static {
-                            symmetric_state.mix_hash(&rs);
-                        }
-                    }
-                    NoiseRole::Responder => {
-                        if let Some(ls) = local_static_public {
-                            symmetric_state.mix_hash(&ls);
-                        }
+            NoisePattern::Ik | NoisePattern::Nk | NoisePattern::X => match role {
+                NoiseRole::Initiator => {
+                    if let Some(rs) = remote_static {
+                        symmetric_state.mix_hash(&rs);
                     }
                 }
-            }
+                NoiseRole::Responder => {
+                    if let Some(ls) = local_static_public {
+                        symmetric_state.mix_hash(&ls);
+                    }
+                }
+            },
         }
 
         HandshakeState {
@@ -208,12 +248,12 @@ impl HandshakeState {
 
     fn perform_dh(&mut self, token: Token) -> Result<(), NoiseError> {
         let (use_local_ephemeral, use_remote_static): (bool, bool) = match (token, self.role) {
-            (Token::Ee, _) => (true, false), // DH(e, re)
-            (Token::Es, NoiseRole::Initiator) => (true, true), // DH(e, rs)
+            (Token::Ee, _) => (true, false),                     // DH(e, re)
+            (Token::Es, NoiseRole::Initiator) => (true, true),   // DH(e, rs)
             (Token::Es, NoiseRole::Responder) => (false, false), // DH(s, re)
             (Token::Se, NoiseRole::Initiator) => (false, false), // DH(s, re)
-            (Token::Se, NoiseRole::Responder) => (true, true), // DH(e, rs)
-            (Token::Ss, _) => (false, true), // DH(s, rs)
+            (Token::Se, NoiseRole::Responder) => (true, true),   // DH(e, rs)
+            (Token::Ss, _) => (false, true),                     // DH(s, rs)
             (Token::E | Token::S, _) => return Ok(()),
         };
 
@@ -259,7 +299,9 @@ impl HandshakeState {
                     self.symmetric_state.mix_hash(&public);
                 }
                 Token::S => {
-                    let static_public = self.local_static_public.ok_or(NoiseError::MissingLocalStaticKey)?;
+                    let static_public = self
+                        .local_static_public
+                        .ok_or(NoiseError::MissingLocalStaticKey)?;
                     let encrypted = self.symmetric_state.encrypt_and_hash(&static_public)?;
                     message.extend_from_slice(&encrypted);
                 }
@@ -289,14 +331,19 @@ impl HandshakeState {
                         return Err(NoiseError::InvalidMessage);
                     }
                     let (ephemeral, rest) = buffer.split_at(32);
-                    let ephemeral = validate_public_key(ephemeral).map_err(|_| NoiseError::InvalidMessage)?;
+                    let ephemeral =
+                        validate_public_key(ephemeral).map_err(|_| NoiseError::InvalidMessage)?;
                     self.remote_ephemeral = Some(ephemeral);
                     buffer = rest;
                     self.symmetric_state.mix_hash(&ephemeral);
                 }
                 Token::S => {
                     // 32 bytes, or 48 (32 + 16-byte tag) when a key is set.
-                    let key_length = if self.symmetric_state.has_cipher_key() { 48 } else { 32 };
+                    let key_length = if self.symmetric_state.has_cipher_key() {
+                        48
+                    } else {
+                        32
+                    };
                     if buffer.len() < key_length {
                         return Err(NoiseError::InvalidMessage);
                     }
@@ -306,7 +353,8 @@ impl HandshakeState {
                         .symmetric_state
                         .decrypt_and_hash(static_data)
                         .map_err(|_| NoiseError::AuthenticationFailure)?;
-                    let key = validate_public_key(&decrypted).map_err(|_| NoiseError::AuthenticationFailure)?;
+                    let key = validate_public_key(&decrypted)
+                        .map_err(|_| NoiseError::AuthenticationFailure)?;
                     self.remote_static = Some(key);
                 }
                 Token::Ee | Token::Es | Token::Se | Token::Ss => self.perform_dh(token)?,
@@ -361,13 +409,8 @@ mod tests {
             None,
             &[],
         );
-        let mut resp = HandshakeState::new(
-            NoiseRole::Responder,
-            NoisePattern::Xx,
-            Some(bob),
-            None,
-            &[],
-        );
+        let mut resp =
+            HandshakeState::new(NoiseRole::Responder, NoisePattern::Xx, Some(bob), None, &[]);
 
         // -> e
         let m1 = init.write_message(&[]).unwrap();

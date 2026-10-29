@@ -18,7 +18,7 @@ pub const CODEC_AAC_LC: u8 = 0x01;
 pub const MAX_FRAMES_PER_PACKET: usize = 8;
 pub const MAX_BURST_CONTENT_BYTES: usize = consts::PTT_MAX_BURST_CONTENT_BYTES;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct VoiceBurstPacket {
     pub burst_id: [u8; 8],
     pub seq: u16,
@@ -37,7 +37,10 @@ impl VoiceBurstPacket {
     }
 
     pub fn data(burst_id: [u8; 8], seq: u16, frames: &[Vec<u8>]) -> Option<Self> {
-        if frames.is_empty() || frames.len() > MAX_FRAMES_PER_PACKET || frames.iter().any(|f| f.is_empty()) {
+        if frames.is_empty()
+            || frames.len() > MAX_FRAMES_PER_PACKET
+            || frames.iter().any(|f| f.is_empty())
+        {
             return None;
         }
         let mut payload = Vec::new();

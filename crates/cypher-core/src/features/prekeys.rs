@@ -52,7 +52,12 @@ impl LocalPrekeyStore {
     /// replenish threshold. `generatedAt` must be strictly monotonic.
     fn replenish(&mut self) {
         let now = self.now();
-        let unconsumed = self.state.records.iter().filter(|r| r.consumed_at_ms.is_none()).count();
+        let unconsumed = self
+            .state
+            .records
+            .iter()
+            .filter(|r| r.consumed_at_ms.is_none())
+            .count();
         if unconsumed >= crate::consts::PREKEY_REPLENISH_THRESHOLD {
             return;
         }
@@ -76,9 +81,17 @@ impl LocalPrekeyStore {
     }
 
     /// Build the signed public bundle for the owner's static key.
-    pub fn build_bundle(&self, owner: &crate::identity::CypherIdentity) -> Option<crate::protocol::prekey::PrekeyBundle> {
+    pub fn build_bundle(
+        &self,
+        owner: &crate::identity::CypherIdentity,
+    ) -> Option<crate::protocol::prekey::PrekeyBundle> {
         let mut prekeys = Vec::new();
-        for record in self.state.records.iter().filter(|r| r.consumed_at_ms.is_none()) {
+        for record in self
+            .state
+            .records
+            .iter()
+            .filter(|r| r.consumed_at_ms.is_none())
+        {
             let bytes: [u8; 32] = record.private_key.clone().try_into().ok()?;
             let secret = StaticSecret::from(bytes);
             prekeys.push(crate::protocol::prekey::Prekey {
@@ -116,7 +129,7 @@ impl LocalPrekeyStore {
             record.consumed_at_ms = Some(now);
         }
         let bytes: [u8; 32] = record.private_key.clone().try_into().ok()?;
-            let secret = StaticSecret::from(bytes);
+        let secret = StaticSecret::from(bytes);
         self.replenish();
         Some(secret)
     }
@@ -131,14 +144,23 @@ impl LocalPrekeyStore {
     pub fn sweep(&mut self) {
         let now = self.now();
         self.state.records.retain(|r| match r.consumed_at_ms {
-            Some(consumed) => now.saturating_sub(consumed) <= crate::consts::PREKEY_CONSUMED_GRACE_S * 1000,
-            None => now.saturating_sub(r.created_at_ms) <= crate::consts::PREKEY_UNCONSUMED_RETENTION_S * 1000,
+            Some(consumed) => {
+                now.saturating_sub(consumed) <= crate::consts::PREKEY_CONSUMED_GRACE_S * 1000
+            }
+            None => {
+                now.saturating_sub(r.created_at_ms)
+                    <= crate::consts::PREKEY_UNCONSUMED_RETENTION_S * 1000
+            }
         });
         self.replenish();
     }
 
     pub fn unconsumed_count(&self) -> usize {
-        self.state.records.iter().filter(|r| r.consumed_at_ms.is_none()).count()
+        self.state
+            .records
+            .iter()
+            .filter(|r| r.consumed_at_ms.is_none())
+            .count()
     }
 
     pub fn to_state(&self) -> &LocalPrekeyState {
@@ -146,10 +168,7 @@ impl LocalPrekeyStore {
     }
 
     pub fn from_state(state: LocalPrekeyState, now_ms: Box<dyn Fn() -> u64 + Send + Sync>) -> Self {
-        let mut store = LocalPrekeyStore {
-            state,
-            now_ms,
-        };
+        let mut store = LocalPrekeyStore { state, now_ms };
         store.sweep();
         store
     }
@@ -190,7 +209,11 @@ impl PrekeyBundleStore {
 
     /// Store a verified bundle. Newer `generatedAt` wins; the key is the
     /// bundle's noise static key (hex).
-    pub fn store_verified(&mut self, bundle: crate::protocol::prekey::PrekeyBundle, now_ms: u64) -> bool {
+    pub fn store_verified(
+        &mut self,
+        bundle: crate::protocol::prekey::PrekeyBundle,
+        now_ms: u64,
+    ) -> bool {
         // Freshness: bundles older than 24 h are not accepted.
         if now_ms.saturating_sub(bundle.generated_at) > crate::consts::PREKEY_FRESHNESS_S * 1000 {
             return false;
@@ -234,7 +257,10 @@ impl PrekeyBundleStore {
     }
 
     /// The freshest bundle for a noise static key.
-    pub fn bundle_for(&self, noise_static_key: &[u8]) -> Option<&crate::protocol::prekey::PrekeyBundle> {
+    pub fn bundle_for(
+        &self,
+        noise_static_key: &[u8],
+    ) -> Option<&crate::protocol::prekey::PrekeyBundle> {
         self.bundles
             .get(&crate::util::hex_encode(noise_static_key))
             .map(|s| &s.bundle)
@@ -242,10 +268,17 @@ impl PrekeyBundleStore {
 
     /// Assign a prekey for a message: the lowest unused ID, stable per
     /// message (re-deposits reuse it). Only fresh bundles (≤ 7 days) seal.
-    pub fn assign_prekey(&mut self, noise_static_key: &[u8], message_id: &str, now_ms: u64) -> Option<(u32, [u8; 32])> {
+    pub fn assign_prekey(
+        &mut self,
+        noise_static_key: &[u8],
+        message_id: &str,
+        now_ms: u64,
+    ) -> Option<(u32, [u8; 32])> {
         let key = crate::util::hex_encode(noise_static_key);
         let stored = self.bundles.get_mut(&key)?;
-        if now_ms.saturating_sub(stored.bundle.generated_at) > crate::consts::PREKEY_MAX_BUNDLE_AGE_FOR_SEALING_S * 1000 {
+        if now_ms.saturating_sub(stored.bundle.generated_at)
+            > crate::consts::PREKEY_MAX_BUNDLE_AGE_FOR_SEALING_S * 1000
+        {
             return None;
         }
         if let Some(&assigned) = stored.assignments.get(message_id) {
@@ -305,15 +338,31 @@ mod tests {
         let mut store = LocalPrekeyStore::with_clock(FixedClock::at(1000));
         assert_eq!(store.unconsumed_count(), crate::consts::PREKEY_BATCH_SIZE);
         // Consuming down to the threshold (3) does not yet replenish.
-        for id in 0..(crate::consts::PREKEY_BATCH_SIZE - crate::consts::PREKEY_REPLENISH_THRESHOLD) as u32 {
+        for id in
+            0..(crate::consts::PREKEY_BATCH_SIZE - crate::consts::PREKEY_REPLENISH_THRESHOLD) as u32
+        {
             store.consume(id).unwrap();
         }
-        assert_eq!(store.unconsumed_count(), crate::consts::PREKEY_REPLENISH_THRESHOLD);
+        assert_eq!(
+            store.unconsumed_count(),
+            crate::consts::PREKEY_REPLENISH_THRESHOLD
+        );
         let bundle = store.build_bundle(&owner).unwrap();
-        assert_eq!(bundle.prekeys.len(), crate::consts::PREKEY_REPLENISH_THRESHOLD);
-        assert!(!bundle.prekeys.iter().any(|p| p.id == 0), "consumed key not republished");
+        assert_eq!(
+            bundle.prekeys.len(),
+            crate::consts::PREKEY_REPLENISH_THRESHOLD
+        );
+        assert!(
+            !bundle.prekeys.iter().any(|p| p.id == 0),
+            "consumed key not republished"
+        );
         // One more consumption crosses the threshold and tops the batch up.
-        store.consume(crate::consts::PREKEY_BATCH_SIZE as u32 - crate::consts::PREKEY_REPLENISH_THRESHOLD as u32).unwrap();
+        store
+            .consume(
+                crate::consts::PREKEY_BATCH_SIZE as u32
+                    - crate::consts::PREKEY_REPLENISH_THRESHOLD as u32,
+            )
+            .unwrap();
         assert_eq!(store.unconsumed_count(), crate::consts::PREKEY_BATCH_SIZE);
         let bundle = store.build_bundle(&owner).unwrap();
         assert_eq!(bundle.prekeys.len(), crate::consts::PREKEY_BATCH_SIZE);
@@ -324,7 +373,9 @@ mod tests {
     fn consumed_prekey_survives_grace_then_dies() {
         let clock = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1000));
         let c2 = clock.clone();
-        let mut store = LocalPrekeyStore::with_clock(Box::new(move || c2.load(std::sync::atomic::Ordering::SeqCst)));
+        let mut store = LocalPrekeyStore::with_clock(Box::new(move || {
+            c2.load(std::sync::atomic::Ordering::SeqCst)
+        }));
         store.consume(0).unwrap();
         // Within the grace window, redelivery re-opens.
         clock.store(1000 + 1000, std::sync::atomic::Ordering::SeqCst);
@@ -350,15 +401,27 @@ mod tests {
         let mut older = bundle.clone();
         older.generated_at = bundle.generated_at - 1;
         assert!(store.store_verified(older, 3000));
-        assert_eq!(store.bundle_for(&owner.noise_static_public()).unwrap().generated_at, bundle.generated_at);
+        assert_eq!(
+            store
+                .bundle_for(&owner.noise_static_public())
+                .unwrap()
+                .generated_at,
+            bundle.generated_at
+        );
 
         // Assignment: lowest unused, stable per message.
-        let (id1, key1) = store.assign_prekey(&owner.noise_static_public(), "msg-a", 3000).unwrap();
+        let (id1, key1) = store
+            .assign_prekey(&owner.noise_static_public(), "msg-a", 3000)
+            .unwrap();
         assert_eq!(id1, 0);
-        let (id2, _) = store.assign_prekey(&owner.noise_static_public(), "msg-b", 3000).unwrap();
+        let (id2, _) = store
+            .assign_prekey(&owner.noise_static_public(), "msg-b", 3000)
+            .unwrap();
         assert_eq!(id2, 1);
         // Re-assign for the same message reuses its prekey.
-        let (id3, key3) = store.assign_prekey(&owner.noise_static_public(), "msg-a", 3000).unwrap();
+        let (id3, key3) = store
+            .assign_prekey(&owner.noise_static_public(), "msg-a", 3000)
+            .unwrap();
         assert_eq!(id3, 0);
         assert_eq!(key1, key3);
     }

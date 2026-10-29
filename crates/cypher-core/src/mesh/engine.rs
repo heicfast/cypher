@@ -29,7 +29,7 @@ use crate::types::{MessageType, NoisePayloadType};
 use crate::util::now_ms;
 
 /// UI-facing events (the engine's `TransportEvent` surface).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub enum EngineEvent {
     /// A public (broadcast) chat message was received and verified.
     PublicMessageReceived {
@@ -48,14 +48,22 @@ pub enum EngineEvent {
         payload: Vec<u8>,
     },
     /// A group message envelope (opaque broadcast) arrived.
-    GroupMessageReceived { timestamp_ms: u64 },
+    GroupMessageReceived {
+        timestamp_ms: u64,
+    },
     /// Courier envelope accepted for carriage or opened (addressed to us).
-    CourierEnvelopeOpened { message: PrivateMessagePacket },
+    CourierEnvelopeOpened {
+        message: PrivateMessagePacket,
+    },
     PeerConnected(crate::PeerId),
     PeerDisconnected(crate::PeerId),
     PeerListUpdated(Vec<crate::PeerId>),
     /// Delivery status change for an outbound message.
-    MessageDeliveryStatusUpdated { message_id: String, sending: bool, failed: bool },
+    MessageDeliveryStatusUpdated {
+        message_id: String,
+        sending: bool,
+        failed: bool,
+    },
     /// A mesh ping completed.
     MeshPingResult {
         peer: crate::PeerId,
@@ -64,13 +72,21 @@ pub enum EngineEvent {
     },
     BluetoothStateChanged(RadioState),
     /// A file transfer packet was received (broadcast or legacy directed).
-    FileTransferReceived { sender: crate::PeerId, file: crate::protocol::file::BitchatFilePacket },
+    FileTransferReceived {
+        sender: crate::PeerId,
+        file: crate::protocol::file::BitchatFilePacket,
+    },
     /// A board payload arrived (already signature-verified).
     BoardPayloadReceived(crate::protocol::board::BoardWire),
     /// A voice frame arrived.
-    PublicVoiceFrameReceived { peer: crate::PeerId, burst: crate::protocol::voice::VoiceBurstPacket },
+    PublicVoiceFrameReceived {
+        peer: crate::PeerId,
+        burst: crate::protocol::voice::VoiceBurstPacket,
+    },
     /// Session established with a peer (mutually authenticated).
-    SessionEstablished { peer: crate::PeerId },
+    SessionEstablished {
+        peer: crate::PeerId,
+    },
 }
 
 /// Everything the engine produces in one turn.
@@ -211,6 +227,11 @@ impl MeshEngine {
         self.has_established_session(peer)
     }
 
+    /// Snapshot of every known peer (for the UI).
+    pub fn peer_snapshot(&self) -> Vec<crate::mesh::peer_registry::PeerInfo> {
+        self.registry.all().cloned().collect()
+    }
+
     // ---- inbound event pump -------------------------------------------------
 
     /// Process a radio event; returns the resulting commands and UI events.
@@ -225,7 +246,11 @@ impl MeshEngine {
                     self.start_services(&mut out, now);
                 }
             }
-            LinkEvent::BytesReceived { link, direction, bytes } => {
+            LinkEvent::BytesReceived {
+                link,
+                direction,
+                bytes,
+            } => {
                 self.ingest_bytes(link, direction, &bytes, &mut out, now);
             }
             LinkEvent::LinkUp { link, direction } => {
@@ -251,7 +276,11 @@ impl MeshEngine {
                 });
                 self.send_announce(true, &mut out, now);
             }
-            LinkEvent::Discovered { peripheral, rssi, connectable } => {
+            LinkEvent::Discovered {
+                peripheral,
+                rssi,
+                connectable,
+            } => {
                 self.handle_discovery(peripheral, rssi, connectable, &mut out, now);
             }
             LinkEvent::Connected { peripheral: _ } => {}
@@ -318,7 +347,12 @@ impl MeshEngine {
     }
 
     /// Send a private message over the established Noise session.
-    pub fn send_private_message(&mut self, peer: &crate::PeerId, content: &str, message_id: &str) -> EngineOutput {
+    pub fn send_private_message(
+        &mut self,
+        peer: &crate::PeerId,
+        content: &str,
+        message_id: &str,
+    ) -> EngineOutput {
         let mut out = EngineOutput::default();
         let now = (self.now_ms)();
         let key = peer.short();
@@ -434,7 +468,9 @@ impl MeshEngine {
     fn start_services(&mut self, out: &mut EngineOutput, now: u64) {
         if !self.scanning {
             self.scanning = true;
-            out.commands.push(LinkCommand::StartScan { allow_duplicates: true });
+            out.commands.push(LinkCommand::StartScan {
+                allow_duplicates: true,
+            });
         }
         if !self.advertising {
             self.advertising = true;
@@ -458,7 +494,14 @@ impl MeshEngine {
         }
     }
 
-    fn handle_discovery(&mut self, peripheral: PeripheralId, rssi: i32, connectable: bool, out: &mut EngineOutput, _now: u64) {
+    fn handle_discovery(
+        &mut self,
+        peripheral: PeripheralId,
+        rssi: i32,
+        connectable: bool,
+        out: &mut EngineOutput,
+        _now: u64,
+    ) {
         if !connectable {
             return;
         }
@@ -492,14 +535,23 @@ impl MeshEngine {
         // Restart scanning to heal the mesh after a drop.
         if self.radio_state == RadioState::PoweredOn && !self.scanning {
             self.scanning = true;
-            out.commands.push(LinkCommand::StartScan { allow_duplicates: true });
+            out.commands.push(LinkCommand::StartScan {
+                allow_duplicates: true,
+            });
         }
         let _ = now;
     }
 
     // ---- internal: ingress ---------------------------------------------------
 
-    fn ingest_bytes(&mut self, link: LinkId, direction: LinkDirection, bytes: &[u8], out: &mut EngineOutput, now: u64) {
+    fn ingest_bytes(
+        &mut self,
+        link: LinkId,
+        direction: LinkDirection,
+        bytes: &[u8],
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         let Some(binding) = self.links.get_mut(&link) else {
             return;
         };
@@ -523,18 +575,21 @@ impl MeshEngine {
     ) {
         // Timestamp skew guard: ±120 s.
         let skew = now.abs_diff(packet.timestamp);
-        if skew > consts::BLE_MAX_TIMESTAMP_SKEW_MS
-            && !(packet.is_rsr && packet.ttl == 0)
-        {
+        if skew > consts::BLE_MAX_TIMESTAMP_SKEW_MS && !(packet.is_rsr && packet.ttl == 0) {
             return;
         }
 
         let sender = crate::PeerId::from_routing_bytes(&packet.sender_id);
 
         // Raw announce binding: a direct (ttl == 7) announce binds the link.
-        if packet.packet_type == MessageType::Announce.as_u8() && packet.ttl == consts::MESSAGE_TTL {
+        if packet.packet_type == MessageType::Announce.as_u8() && packet.ttl == consts::MESSAGE_TTL
+        {
             if let Some(binding) = self.links.get_mut(&link) {
-                let already = binding.bound_peer.as_ref().map(|p| *p == sender).unwrap_or(false);
+                let already = binding
+                    .bound_peer
+                    .as_ref()
+                    .map(|p| *p == sender)
+                    .unwrap_or(false);
                 if already || binding.bound_peer.is_none() {
                     binding.bound_peer = Some(sender.clone());
                 }
@@ -543,7 +598,8 @@ impl MeshEngine {
 
         // Dedup (fragments are exempt; self sync-replay is exempt).
         let is_self_sync_replay = packet.ttl == 0 && sender == self.local_peer_id();
-        let should_dedup = packet.packet_type != MessageType::Fragment.as_u8() && !is_self_sync_replay;
+        let should_dedup =
+            packet.packet_type != MessageType::Fragment.as_u8() && !is_self_sync_replay;
         let message_id = packet.message_identity();
         if should_dedup && self.dedup.check_and_record(&message_id, now) {
             return; // duplicate: no delivery, no relay
@@ -554,9 +610,14 @@ impl MeshEngine {
             self.registry.touch(peer, now);
         }
         if packet.version >= 2 {
-            self.topology.record_observed_version(packet.sender_id, packet.version, now / 1000);
+            self.topology
+                .record_observed_version(packet.sender_id, packet.version, now / 1000);
             if let Some(peer) = &ingress_peer {
-                self.topology.record_observed_version(peer.routing_bytes(), packet.version, now / 1000);
+                self.topology.record_observed_version(
+                    peer.routing_bytes(),
+                    packet.version,
+                    now / 1000,
+                );
             }
         }
 
@@ -565,9 +626,15 @@ impl MeshEngine {
             Some(MessageType::Announce) => self.handle_announce(packet, link, &sender, out, now),
             Some(MessageType::Message) => self.handle_public_message(packet, &sender, out, now),
             Some(MessageType::Leave) => self.handle_leave(&packet, &sender, out),
-            Some(MessageType::NoiseHandshake) => self.handle_handshake(packet, link, &sender, out, now),
-            Some(MessageType::NoiseEncrypted) => self.handle_encrypted(packet, link, &sender, out, now),
-            Some(MessageType::Fragment) => self.handle_fragment(packet, link, direction, &sender, out, now),
+            Some(MessageType::NoiseHandshake) => {
+                self.handle_handshake(packet, link, &sender, out, now)
+            }
+            Some(MessageType::NoiseEncrypted) => {
+                self.handle_encrypted(packet, link, &sender, out, now)
+            }
+            Some(MessageType::Fragment) => {
+                self.handle_fragment(packet, link, direction, &sender, out, now)
+            }
             Some(MessageType::Ping) => self.handle_ping(packet, &sender, out, now),
             Some(MessageType::Pong) => self.handle_pong(&packet, &sender, out, now),
             Some(MessageType::GroupMessage) => {
@@ -579,7 +646,9 @@ impl MeshEngine {
             Some(MessageType::FileTransfer) => self.handle_file_transfer(packet, &sender, out, now),
             Some(MessageType::BoardPost) => self.handle_board_post(&packet, &sender, out, now),
             Some(MessageType::VoiceFrame) => self.handle_voice_frame(packet, &sender, out, now),
-            Some(MessageType::PrekeyBundle) | Some(MessageType::CourierEnvelope) | Some(MessageType::RequestSync) => {
+            Some(MessageType::PrekeyBundle)
+            | Some(MessageType::CourierEnvelope)
+            | Some(MessageType::RequestSync) => {
                 // Handled by the features layer hooks; relayed transparently.
                 self.schedule_relay(packet, link, &message_id, out, now);
             }
@@ -593,7 +662,14 @@ impl MeshEngine {
 
     // ---- internal: per-type handlers -----------------------------------------
 
-    fn handle_announce(&mut self, packet: BitchatPacket, link: LinkId, sender: &crate::PeerId, out: &mut EngineOutput, now: u64) {
+    fn handle_announce(
+        &mut self,
+        packet: BitchatPacket,
+        link: LinkId,
+        sender: &crate::PeerId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         let known_noise = self.registry.get(sender).map(|p| p.noise_public_key);
         let pinned = self.registry.get(sender).and_then(|p| p.pinned_signing_key);
         let authenticated = None; // populated by the Noise layer for session-authenticated peers
@@ -610,8 +686,17 @@ impl MeshEngine {
         };
 
         let was_known = self.registry.get(sender).is_some();
-        let was_connected = self.registry.get(sender).map(|p| p.is_connected).unwrap_or(false);
-        let noise_key: [u8; 32] = accepted.packet.noise_public_key.clone().try_into().expect("checked in evaluate");
+        let was_connected = self
+            .registry
+            .get(sender)
+            .map(|p| p.is_connected)
+            .unwrap_or(false);
+        let noise_key: [u8; 32] = accepted
+            .packet
+            .noise_public_key
+            .clone()
+            .try_into()
+            .expect("checked in evaluate");
         let signing_key: [u8; 32] = accepted
             .packet
             .signing_public_key
@@ -654,14 +739,22 @@ impl MeshEngine {
         if accepted.is_direct && (!was_known || !was_connected) {
             out.events.push(EngineEvent::PeerConnected(sender.clone()));
         }
-        out.events.push(EngineEvent::PeerListUpdated(self.registry.connected_peers()));
+        out.events.push(EngineEvent::PeerListUpdated(
+            self.registry.connected_peers(),
+        ));
 
         // Relay the announce.
         let message_id = packet.message_identity();
         self.schedule_relay(packet, link, &message_id, out, now);
     }
 
-    fn handle_public_message(&mut self, packet: BitchatPacket, sender: &crate::PeerId, out: &mut EngineOutput, now: u64) {
+    fn handle_public_message(
+        &mut self,
+        packet: BitchatPacket,
+        sender: &crate::PeerId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         // Self-echo policy: our own broadcast coming back with ttl != 0 is dropped.
         if *sender == self.local_peer_id() && packet.ttl != 0 {
             return;
@@ -686,8 +779,11 @@ impl MeshEngine {
         let Ok(content) = String::from_utf8(packet.payload.clone()) else {
             return;
         };
-        let message_id =
-            crate::protocol::private::MeshMessageIdentity::stable_id(sender.as_str(), packet.timestamp, &content);
+        let message_id = crate::protocol::private::MeshMessageIdentity::stable_id(
+            sender.as_str(),
+            packet.timestamp,
+            &content,
+        );
         out.events.push(EngineEvent::PublicMessageReceived {
             sender: sender.clone(),
             nickname: info.nickname.clone(),
@@ -700,7 +796,12 @@ impl MeshEngine {
         self.schedule_relay(packet, LinkId::MAX, &mid, out, now);
     }
 
-    fn handle_leave(&mut self, packet: &BitchatPacket, sender: &crate::PeerId, out: &mut EngineOutput) {
+    fn handle_leave(
+        &mut self,
+        packet: &BitchatPacket,
+        sender: &crate::PeerId,
+        out: &mut EngineOutput,
+    ) {
         // Signature must verify against the registry key.
         let Some(signature) = &packet.signature else {
             return;
@@ -716,12 +817,21 @@ impl MeshEngine {
         }
         self.sessions.remove(sender.short().as_str());
         self.registry.remove(sender);
-        out.events.push(EngineEvent::PeerDisconnected(sender.clone()));
         out.events
-            .push(EngineEvent::PeerListUpdated(self.registry.connected_peers()));
+            .push(EngineEvent::PeerDisconnected(sender.clone()));
+        out.events.push(EngineEvent::PeerListUpdated(
+            self.registry.connected_peers(),
+        ));
     }
 
-    fn handle_handshake(&mut self, packet: BitchatPacket, link: LinkId, sender: &crate::PeerId, out: &mut EngineOutput, now: u64) {
+    fn handle_handshake(
+        &mut self,
+        packet: BitchatPacket,
+        link: LinkId,
+        sender: &crate::PeerId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         // Only process when addressed to us.
         if let Some(recipient) = &packet.recipient_id {
             if crate::PeerId::from_routing_bytes(recipient) != self.local_peer_id() {
@@ -743,7 +853,11 @@ impl MeshEngine {
         let mut established_now = false;
         if is_fresh_initiation {
             // Respond (possibly replacing a half-open initiator session).
-            let mut session = NoiseSession::new(sender.clone(), NoiseRole::Responder, clone_static(self.identity.noise_static_secret()));
+            let mut session = NoiseSession::new(
+                sender.clone(),
+                NoiseRole::Responder,
+                clone_static(self.identity.noise_static_secret()),
+            );
             match session.process_handshake_message(&packet.payload) {
                 Ok(Some(resp)) => {
                     response = Some(resp);
@@ -786,12 +900,20 @@ impl MeshEngine {
 
         // 2. Then the session-established side effects.
         if established_now {
-            out.events.push(EngineEvent::SessionEstablished { peer: sender.clone() });
+            out.events.push(EngineEvent::SessionEstablished {
+                peer: sender.clone(),
+            });
             self.on_session_established(sender, link, out, now);
         }
     }
 
-    fn on_session_established(&mut self, peer: &crate::PeerId, link: LinkId, out: &mut EngineOutput, now: u64) {
+    fn on_session_established(
+        &mut self,
+        peer: &crate::PeerId,
+        link: LinkId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         // Mark the ingress link Noise-authenticated when it is bound to the peer.
         if let Some(binding) = self.links.get_mut(&link) {
             if binding.bound_peer.as_ref() == Some(peer) {
@@ -807,7 +929,8 @@ impl MeshEngine {
             .filter(|(p, _, _)| p.short() == peer.short())
             .cloned()
             .collect();
-        self.pending_private.retain(|(p, _, _)| p.short() != peer.short());
+        self.pending_private
+            .retain(|(p, _, _)| p.short() != peer.short());
         for (target, content, message_id) in pending {
             let drained = self.send_private_message(&target, &content, &message_id);
             out.events.extend(drained.events);
@@ -815,7 +938,14 @@ impl MeshEngine {
         }
     }
 
-    fn handle_encrypted(&mut self, packet: BitchatPacket, link: LinkId, sender: &crate::PeerId, out: &mut EngineOutput, now: u64) {
+    fn handle_encrypted(
+        &mut self,
+        packet: BitchatPacket,
+        link: LinkId,
+        sender: &crate::PeerId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         // Only process when addressed to us; others relay.
         if let Some(recipient) = &packet.recipient_id {
             if crate::PeerId::from_routing_bytes(recipient) != self.local_peer_id() {
@@ -839,12 +969,11 @@ impl MeshEngine {
                 match NoisePayloadType::from_u8(payload_type) {
                     Some(NoisePayloadType::PrivateMessage) => {
                         if let Some(pm) = PrivateMessagePacket::decode(&payload) {
-                            out.events
-                                .push(EngineEvent::NoisePayloadReceived {
-                                    peer: sender.clone(),
-                                    payload_type,
-                                    payload,
-                                });
+                            out.events.push(EngineEvent::NoisePayloadReceived {
+                                peer: sender.clone(),
+                                payload_type,
+                                payload,
+                            });
                             // Implicit DELIVERED ack behavior lives in the
                             // features layer.
                             let _ = pm;
@@ -867,7 +996,9 @@ impl MeshEngine {
                 | NoiseError::InvalidCiphertext
                 | NoiseError::MessageTooLarge => {}
                 // Local lifecycle failures: reset and re-handshake.
-                NoiseError::SessionExpired | NoiseError::SessionExhausted | NoiseError::NotEstablished => {
+                NoiseError::SessionExpired
+                | NoiseError::SessionExhausted
+                | NoiseError::NotEstablished => {
                     self.sessions.remove(key.as_str());
                     self.initiate_handshake(sender, out, now);
                 }
@@ -909,13 +1040,19 @@ impl MeshEngine {
         }
     }
 
-    fn handle_ping(&mut self, packet: BitchatPacket, sender: &crate::PeerId, out: &mut EngineOutput, now: u64) {
+    fn handle_ping(
+        &mut self,
+        packet: BitchatPacket,
+        sender: &crate::PeerId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         let Some(recipient) = &packet.recipient_id else {
             return;
         };
         if crate::PeerId::from_routing_bytes(recipient) != self.local_peer_id() {
             let mid = packet.message_identity();
-        self.schedule_relay(packet, LinkId::MAX, &mid, out, now);
+            self.schedule_relay(packet, LinkId::MAX, &mid, out, now);
             return;
         }
         let Some(ping) = MeshPingPayload::decode(&packet.payload) else {
@@ -934,7 +1071,13 @@ impl MeshEngine {
         self.send_packet(reply, out, now);
     }
 
-    fn handle_pong(&mut self, packet: &BitchatPacket, sender: &crate::PeerId, out: &mut EngineOutput, now: u64) {
+    fn handle_pong(
+        &mut self,
+        packet: &BitchatPacket,
+        sender: &crate::PeerId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         let Some(pong) = MeshPingPayload::decode(&packet.payload) else {
             return;
         };
@@ -949,7 +1092,13 @@ impl MeshEngine {
         }
     }
 
-    fn handle_file_transfer(&mut self, packet: BitchatPacket, sender: &crate::PeerId, out: &mut EngineOutput, now: u64) {
+    fn handle_file_transfer(
+        &mut self,
+        packet: BitchatPacket,
+        sender: &crate::PeerId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         // Raw file transfers must be signed.
         let Some(signature) = &packet.signature else {
             return;
@@ -986,16 +1135,34 @@ impl MeshEngine {
         self.schedule_relay(packet, LinkId::MAX, &mid, out, now);
     }
 
-    fn handle_board_post(&mut self, packet: &BitchatPacket, _sender: &crate::PeerId, out: &mut EngineOutput, now: u64) {
+    fn handle_board_post(
+        &mut self,
+        packet: &BitchatPacket,
+        _sender: &crate::PeerId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         if let Some(wire) = crate::protocol::board::BoardWire::decode(&packet.payload) {
             if wire.verify_signature() {
                 out.events.push(EngineEvent::BoardPayloadReceived(wire));
             }
         }
-        self.schedule_relay(packet.clone(), LinkId::MAX, &packet.message_identity(), out, now);
+        self.schedule_relay(
+            packet.clone(),
+            LinkId::MAX,
+            &packet.message_identity(),
+            out,
+            now,
+        );
     }
 
-    fn handle_voice_frame(&mut self, packet: BitchatPacket, sender: &crate::PeerId, out: &mut EngineOutput, now: u64) {
+    fn handle_voice_frame(
+        &mut self,
+        packet: BitchatPacket,
+        sender: &crate::PeerId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
         // Public voice: freshness 30 s, signature-verified.
         if now.saturating_sub(packet.timestamp) > consts::PTT_PUBLIC_FRAME_MAX_AGE_S * 1000 {
             return;
@@ -1018,7 +1185,13 @@ impl MeshEngine {
                 burst,
             });
         }
-        self.schedule_relay(packet.clone(), LinkId::MAX, &packet.message_identity(), out, now);
+        self.schedule_relay(
+            packet.clone(),
+            LinkId::MAX,
+            &packet.message_identity(),
+            out,
+            now,
+        );
     }
 
     // ---- internal: outbound & relay -------------------------------------------
@@ -1026,8 +1199,16 @@ impl MeshEngine {
     /// Send a packet on the appropriate links (fragmenting when needed).
     fn send_packet(&mut self, packet: BitchatPacket, out: &mut EngineOutput, now: u64) {
         // Fragment when the frame exceeds the minimum link limit.
-        let min_limit = self.links.values().map(|_| consts::BLE_DEFAULT_FRAGMENT_SIZE).min().unwrap_or(consts::BLE_DEFAULT_FRAGMENT_SIZE);
-        let encoded_len = packet.to_binary_data(false).map(|d| d.len()).unwrap_or(usize::MAX);
+        let min_limit = self
+            .links
+            .values()
+            .map(|_| consts::BLE_DEFAULT_FRAGMENT_SIZE)
+            .min()
+            .unwrap_or(consts::BLE_DEFAULT_FRAGMENT_SIZE);
+        let encoded_len = packet
+            .to_binary_data(false)
+            .map(|d| d.len())
+            .unwrap_or(usize::MAX);
         if encoded_len > min_limit && packet.packet_type != MessageType::Fragment.as_u8() {
             if let Some(fragments) = plan_fragments(&packet, None, now) {
                 for fragment in fragments {
@@ -1065,7 +1246,11 @@ impl MeshEngine {
         );
         if let Some(encoded) = packet.to_binary_data(pad_frame) {
             for link in targets {
-                let direction = self.links.get(&link).map(|b| b.direction).unwrap_or(LinkDirection::Central);
+                let direction = self
+                    .links
+                    .get(&link)
+                    .map(|b| b.direction)
+                    .unwrap_or(LinkDirection::Central);
                 out.commands.push(LinkCommand::Write {
                     link,
                     direction,
@@ -1073,7 +1258,9 @@ impl MeshEngine {
                     priority: match MessageType::from_u8(packet.packet_type) {
                         Some(MessageType::Fragment) => WritePriority::Fragment(0),
                         Some(MessageType::FileTransfer) => WritePriority::FileTransfer,
-                        Some(MessageType::NoiseEncrypted) | Some(MessageType::NoiseHandshake) => WritePriority::High,
+                        Some(MessageType::NoiseEncrypted) | Some(MessageType::NoiseHandshake) => {
+                            WritePriority::High
+                        }
                         _ => WritePriority::Low,
                     },
                 });
@@ -1081,10 +1268,25 @@ impl MeshEngine {
         }
     }
 
-    fn schedule_relay(&mut self, packet: BitchatPacket, ingress_link: LinkId, message_id: &str, _out: &mut EngineOutput, now: u64) {
-        let ingress_peer = self.links.get(&ingress_link).and_then(|b| b.bound_peer.clone());
+    fn schedule_relay(
+        &mut self,
+        packet: BitchatPacket,
+        ingress_link: LinkId,
+        message_id: &str,
+        _out: &mut EngineOutput,
+        now: u64,
+    ) {
+        let ingress_peer = self
+            .links
+            .get(&ingress_link)
+            .and_then(|b| b.bound_peer.clone());
         let degree = self.registry.degree();
-        let decision = relay::decide(&packet, &ingress_peer.clone().unwrap_or_else(|| self.local_peer_id()), &self.local_peer_id(), degree);
+        let decision = relay::decide(
+            &packet,
+            &ingress_peer.clone().unwrap_or_else(|| self.local_peer_id()),
+            &self.local_peer_id(),
+            degree,
+        );
         if !decision.should_relay {
             return;
         }
@@ -1096,7 +1298,11 @@ impl MeshEngine {
         self.scheduled_relays.push(ScheduledRelay {
             packet: relayed,
             due_ms: now + jitter,
-            ingress_link: if ingress_link == LinkId::MAX { None } else { Some(ingress_link) },
+            ingress_link: if ingress_link == LinkId::MAX {
+                None
+            } else {
+                Some(ingress_link)
+            },
             message_id: message_id.to_string(),
         });
     }
@@ -1115,7 +1321,10 @@ impl MeshEngine {
         let is_directed = relay
             .packet
             .recipient_id
-            .map(|r| crate::PeerId::from_routing_bytes(&r).as_str() != crate::util::hex_encode(&crate::PeerId::broadcast_marker()))
+            .map(|r| {
+                crate::PeerId::from_routing_bytes(&r).as_str()
+                    != crate::util::hex_encode(&crate::PeerId::broadcast_marker())
+            })
             .unwrap_or(false);
         let targets = if is_directed {
             relay
@@ -1132,7 +1341,11 @@ impl MeshEngine {
         );
         if let Some(encoded) = relay.packet.to_binary_data(pad_frame) {
             for link in targets {
-                let direction = self.links.get(&link).map(|b| b.direction).unwrap_or(LinkDirection::Central);
+                let direction = self
+                    .links
+                    .get(&link)
+                    .map(|b| b.direction)
+                    .unwrap_or(LinkDirection::Central);
                 out.commands.push(LinkCommand::Write {
                     link,
                     direction,
@@ -1148,7 +1361,11 @@ impl MeshEngine {
         let key = peer.short().as_str().to_string();
         // Crossed-handshake tie-break: yield when we are the greater ID and a
         // fresh initiation may be in flight.
-        let mut session = NoiseSession::new(peer.clone(), NoiseRole::Initiator, clone_static(self.identity.noise_static_secret()));
+        let mut session = NoiseSession::new(
+            peer.clone(),
+            NoiseRole::Initiator,
+            clone_static(self.identity.noise_static_secret()),
+        );
         if let Ok(message1) = session.start_handshake() {
             self.sessions.insert(key, session);
             let packet = BitchatPacket::new(
@@ -1191,7 +1408,9 @@ impl MeshEngine {
             payload,
             consts::MESSAGE_TTL,
         );
-        let preimage = packet.to_binary_data_for_signing().expect("announce encodable");
+        let preimage = packet
+            .to_binary_data_for_signing()
+            .expect("announce encodable");
         packet.signature = Some(self.identity.sign(&preimage));
         self.announce_throttle.record(forced, now);
         self.last_announce_ms = Some(now);
@@ -1205,7 +1424,12 @@ impl MeshEngine {
             .map(|t| (now.saturating_sub(t)) as f64 / 1000.0)
             .unwrap_or(f64::MAX);
         let recent_traffic = false; // simplified: the engine's dedup activity feeds this in a full port
-        if announce::should_announce(self.maintenance_cycle, self.registry.degree(), recent_traffic, elapsed) {
+        if announce::should_announce(
+            self.maintenance_cycle,
+            self.registry.degree(),
+            recent_traffic,
+            elapsed,
+        ) {
             self.send_announce(false, out, now);
         }
 
@@ -1223,14 +1447,17 @@ impl MeshEngine {
         for peer in disconnected {
             out.events.push(EngineEvent::PeerDisconnected(peer));
         }
-        out.events
-            .push(EngineEvent::PeerListUpdated(self.registry.connected_peers()));
+        out.events.push(EngineEvent::PeerListUpdated(
+            self.registry.connected_peers(),
+        ));
 
         // Topology pruning.
         self.topology.prune(now / 1000);
 
         // Ping probe expiry (10 s).
-        self.ping_probes.retain(|_, p| now.saturating_sub(p.sent_ms) < (consts::MESH_PING_TIMEOUT_S * 1000.0) as u64);
+        self.ping_probes.retain(|_, p| {
+            now.saturating_sub(p.sent_ms) < (consts::MESH_PING_TIMEOUT_S * 1000.0) as u64
+        });
 
         // Every third cycle: deeper cleanup (already covered incrementally).
     }
@@ -1240,10 +1467,12 @@ impl MeshEngine {
         if let Some(next) = self.scheduled_relays.iter().map(|r| r.due_ms).min() {
             candidates.push(next);
         }
-        candidates.push(now + ((consts::BLE_MAINTENANCE_INTERVAL_S
-            - now.saturating_sub(self.last_maintenance_ms) as f64 / 1000.0)
-            .max(0.25)
-            * 1000.0) as u64);
+        candidates.push(
+            now + ((consts::BLE_MAINTENANCE_INTERVAL_S
+                - now.saturating_sub(self.last_maintenance_ms) as f64 / 1000.0)
+                .max(0.25)
+                * 1000.0) as u64,
+        );
         candidates.into_iter().min()
     }
 }

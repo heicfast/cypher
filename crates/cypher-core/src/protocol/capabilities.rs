@@ -104,3 +104,9 @@ mod tests {
         assert!(PeerCapabilities::decode(&[0u8; 9]).is_none());
     }
 }
+
+impl serde::Serialize for PeerCapabilities {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(self.0)
+    }
+}

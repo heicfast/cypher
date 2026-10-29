@@ -147,8 +147,12 @@ impl IdentityStore for FileIdentityStore {
         };
         let doc: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let noise = doc["noiseStaticKey"].as_str().and_then(crate::util::hex_decode);
-        let signing = doc["ed25519SigningKey"].as_str().and_then(crate::util::hex_decode);
+        let noise = doc["noiseStaticKey"]
+            .as_str()
+            .and_then(crate::util::hex_decode);
+        let signing = doc["ed25519SigningKey"]
+            .as_str()
+            .and_then(crate::util::hex_decode);
         match (noise, signing) {
             (Some(n), Some(s)) if n.len() == 32 && s.len() == 32 => {
                 let mut n_arr = [0u8; 32];
@@ -191,8 +195,16 @@ mod tests {
         // Ed25519 sign/verify.
         let sig = id.sign(b"packet preimage");
         assert_eq!(sig.len(), 64);
-        assert!(CypherIdentity::verify(&sig, b"packet preimage", &id.signing_public()));
-        assert!(!CypherIdentity::verify(&sig, b"tampered", &id.signing_public()));
+        assert!(CypherIdentity::verify(
+            &sig,
+            b"packet preimage",
+            &id.signing_public()
+        ));
+        assert!(!CypherIdentity::verify(
+            &sig,
+            b"tampered",
+            &id.signing_public()
+        ));
 
         // Deterministic Ed25519: same input, same signature bytes.
         assert_eq!(id.sign(b"packet preimage"), sig);

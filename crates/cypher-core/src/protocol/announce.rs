@@ -30,7 +30,13 @@ impl AnnouncementPacket {
         if self.noise_public_key.len() > 255 || self.signing_public_key.len() > 255 {
             return None;
         }
-        let mut data = Vec::with_capacity(2 + nickname.len() + 2 + self.noise_public_key.len() + 2 + self.signing_public_key.len());
+        let mut data = Vec::with_capacity(
+            2 + nickname.len()
+                + 2
+                + self.noise_public_key.len()
+                + 2
+                + self.signing_public_key.len(),
+        );
         write_short(&mut data, 0x01, nickname);
         write_short(&mut data, 0x02, &self.noise_public_key);
         write_short(&mut data, 0x03, &self.signing_public_key);

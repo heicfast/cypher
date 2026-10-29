@@ -47,12 +47,16 @@ impl NoiseRateLimiter {
         let now = self.now_s();
         let window_start = now - 60.0;
         // Global limit first.
-        self.global_handshake_timestamps.retain(|&t| t > window_start);
+        self.global_handshake_timestamps
+            .retain(|&t| t > window_start);
         if self.global_handshake_timestamps.len() >= consts::NOISE_MAX_GLOBAL_HANDSHAKES_PER_MIN {
             return false;
         }
         // Then per-peer.
-        let timestamps = self.handshake_timestamps.entry(peer_id.as_str().to_string()).or_default();
+        let timestamps = self
+            .handshake_timestamps
+            .entry(peer_id.as_str().to_string())
+            .or_default();
         timestamps.retain(|&t| t > window_start);
         if timestamps.len() >= consts::NOISE_MAX_HANDSHAKES_PER_MIN_PER_PEER {
             return false;
@@ -69,7 +73,10 @@ impl NoiseRateLimiter {
         if self.global_message_timestamps.len() >= consts::NOISE_MAX_GLOBAL_MESSAGES_PER_S {
             return false;
         }
-        let timestamps = self.message_timestamps.entry(peer_id.as_str().to_string()).or_default();
+        let timestamps = self
+            .message_timestamps
+            .entry(peer_id.as_str().to_string())
+            .or_default();
         timestamps.retain(|&t| t > window_start);
         if timestamps.len() >= consts::NOISE_MAX_MESSAGES_PER_S_PER_PEER {
             return false;
@@ -112,7 +119,10 @@ mod tests {
         for _ in 0..10 {
             assert!(rl.allow_handshake(&peer));
         }
-        assert!(!rl.allow_handshake(&peer), "11th handshake within a minute rejected");
+        assert!(
+            !rl.allow_handshake(&peer),
+            "11th handshake within a minute rejected"
+        );
         // Advance past the window.
         clock.fetch_add(61_000, Ordering::SeqCst);
         assert!(rl.allow_handshake(&peer));

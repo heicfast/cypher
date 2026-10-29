@@ -72,7 +72,9 @@ pub fn open_courier_payload(
         COURIER_PROLOGUE,
     );
     let payload = open.read_message(ciphertext)?;
-    let sender = open.get_remote_static_public_key().ok_or(NoiseError::MissingKeys)?;
+    let sender = open
+        .get_remote_static_public_key()
+        .ok_or(NoiseError::MissingKeys)?;
     Ok((payload, sender))
 }
 
@@ -93,7 +95,9 @@ pub fn open_prekey_payload(
         &prologue,
     );
     let payload = open.read_message(ciphertext)?;
-    let sender = open.get_remote_static_public_key().ok_or(NoiseError::MissingKeys)?;
+    let sender = open
+        .get_remote_static_public_key()
+        .ok_or(NoiseError::MissingKeys)?;
     Ok((payload, sender))
 }
 
@@ -109,10 +113,19 @@ pub fn make_envelope(
 ) -> Option<CourierEnvelope> {
     let payload = courier_plaintext(message_id, content)?;
     let (ciphertext, prekey_id) = match prekey {
-        Some((id, key)) => (seal_prekey_payload(&payload, sender_static, id, &key).ok()?, Some(id)),
-        None => (seal_courier_payload(&payload, sender_static, recipient_noise_static).ok()?, None),
+        Some((id, key)) => (
+            seal_prekey_payload(&payload, sender_static, id, &key).ok()?,
+            Some(id),
+        ),
+        None => (
+            seal_courier_payload(&payload, sender_static, recipient_noise_static).ok()?,
+            None,
+        ),
     };
-    let tag = CourierEnvelope::recipient_tag(recipient_noise_static, CourierEnvelope::epoch_day(unix_seconds));
+    let tag = CourierEnvelope::recipient_tag(
+        recipient_noise_static,
+        CourierEnvelope::epoch_day(unix_seconds),
+    );
     Some(CourierEnvelope::new(
         tag.to_vec(),
         now_ms + crate::consts::COURIER_MAX_LIFETIME_S * 1000,
@@ -178,18 +191,30 @@ impl CourierStore {
     /// Deposit an envelope from `depositor` (identified by Noise public key).
     /// Validates shape, expiry bounds, quotas, and dedups identical
     /// ciphertext (never replenishing spent spray budgets).
-    pub fn deposit(&mut self, envelope: CourierEnvelope, depositor_noise_key: Vec<u8>, tier: CourierTier, now_ms: u64) -> bool {
+    pub fn deposit(
+        &mut self,
+        envelope: CourierEnvelope,
+        depositor_noise_key: Vec<u8>,
+        tier: CourierTier,
+        now_ms: u64,
+    ) -> bool {
         if envelope.recipient_tag.len() != crate::consts::COURIER_TAG_LENGTH {
             return false;
         }
-        if envelope.ciphertext.is_empty() || envelope.ciphertext.len() > crate::consts::COURIER_MAX_CIPHERTEXT_BYTES {
+        if envelope.ciphertext.is_empty()
+            || envelope.ciphertext.len() > crate::consts::COURIER_MAX_CIPHERTEXT_BYTES
+        {
             return false;
         }
         // Expiry bound: not expired, not pinned beyond 24 h (+1 h slack).
         if envelope.is_expired(now_ms) {
             return false;
         }
-        if envelope.expiry > now_ms + (crate::consts::COURIER_MAX_LIFETIME_S + crate::consts::COURIER_EXPIRY_SLACK_S) * 1000 {
+        if envelope.expiry
+            > now_ms
+                + (crate::consts::COURIER_MAX_LIFETIME_S + crate::consts::COURIER_EXPIRY_SLACK_S)
+                    * 1000
+        {
             return false;
         }
 
@@ -246,7 +271,12 @@ impl CourierStore {
         }
         // Hard verified-tier bound.
         if tier == CourierTier::Verified
-            && self.envelopes.iter().filter(|e| e.tier == CourierTier::Verified).count() >= verified_cap
+            && self
+                .envelopes
+                .iter()
+                .filter(|e| e.tier == CourierTier::Verified)
+                .count()
+                >= verified_cap
         {
             return false;
         }
@@ -271,7 +301,10 @@ impl CourierStore {
         let mut taken = Vec::new();
         let mut retained = Vec::new();
         for envelope in self.envelopes.drain(..) {
-            if candidate_tags.iter().any(|t| t.as_slice() == envelope.recipient_tag.as_slice()) {
+            if candidate_tags
+                .iter()
+                .any(|t| t.as_slice() == envelope.recipient_tag.as_slice())
+            {
                 taken.push(envelope);
             } else {
                 retained.push(envelope);
@@ -371,7 +404,10 @@ impl MessageOutboxStore {
     }
 
     pub fn enqueue(&mut self, peer: &crate::PeerId, message: QueuedMessage) {
-        let entry = self.outbox.entry(peer.short().as_str().to_string()).or_default();
+        let entry = self
+            .outbox
+            .entry(peer.short().as_str().to_string())
+            .or_default();
         entry.push(message);
         // Capacity: 100 messages per peer, FIFO eviction.
         while entry.len() > crate::consts::OUTBOX_MAX_PER_PEER {
@@ -389,7 +425,12 @@ impl MessageOutboxStore {
 
     /// Mark a send attempt; drops the message when attempts are exhausted or
     /// the 24 h TTL lapses. Returns the message to send, if any remain.
-    pub fn attempt(&mut self, peer: &crate::PeerId, message_id: &str, now_ms: u64) -> Option<QueuedMessage> {
+    pub fn attempt(
+        &mut self,
+        peer: &crate::PeerId,
+        message_id: &str,
+        now_ms: u64,
+    ) -> Option<QueuedMessage> {
         let entry = self.outbox.get_mut(peer.short().as_str())?;
         let index = entry.iter().position(|m| m.message_id == message_id)?;
         entry[index].send_attempts += 1;
@@ -439,12 +480,14 @@ mod tests {
             let prekey_secret = StaticSecret::from(prekey_seed);
             let prekey_pub = *x25519_dalek::PublicKey::from(&prekey_secret).as_bytes();
             (
-                seal_prekey_payload(&payload, sender.noise_static_secret(), 7, &prekey_pub).unwrap(),
+                seal_prekey_payload(&payload, sender.noise_static_secret(), 7, &prekey_pub)
+                    .unwrap(),
                 Some((7, prekey_secret)),
             )
         } else {
             (
-                seal_courier_payload(&payload, sender.noise_static_secret(), &recipient_pub).unwrap(),
+                seal_courier_payload(&payload, sender.noise_static_secret(), &recipient_pub)
+                    .unwrap(),
                 None,
             )
         };
@@ -473,8 +516,12 @@ mod tests {
         let recipient = CypherIdentity::generate();
         let other = CypherIdentity::generate();
         let payload = courier_plaintext("m", "x").unwrap();
-        let ciphertext =
-            seal_courier_payload(&payload, sender.noise_static_secret(), &recipient.noise_static_public()).unwrap();
+        let ciphertext = seal_courier_payload(
+            &payload,
+            sender.noise_static_secret(),
+            &recipient.noise_static_public(),
+        )
+        .unwrap();
         assert!(open_courier_payload(&ciphertext, other.noise_static_secret()).is_err());
     }
 
@@ -485,8 +532,18 @@ mod tests {
         let sender = CypherIdentity::generate();
         let recipient = CypherIdentity::generate();
         let payload = courier_plaintext("m", "same content").unwrap();
-        let c1 = seal_courier_payload(&payload, sender.noise_static_secret(), &recipient.noise_static_public()).unwrap();
-        let c2 = seal_courier_payload(&payload, sender.noise_static_secret(), &recipient.noise_static_public()).unwrap();
+        let c1 = seal_courier_payload(
+            &payload,
+            sender.noise_static_secret(),
+            &recipient.noise_static_public(),
+        )
+        .unwrap();
+        let c2 = seal_courier_payload(
+            &payload,
+            sender.noise_static_secret(),
+            &recipient.noise_static_public(),
+        )
+        .unwrap();
         assert_ne!(c1, c2);
         assert_ne!(&c1[..32], &c2[..32]);
     }
@@ -530,15 +587,40 @@ mod tests {
             )
         };
         // Verified depositor: max 2.
-        assert!(store.deposit(build(1), depositor.clone(), CourierTier::Verified, 1_750_000_000_000));
-        assert!(store.deposit(build(2), depositor.clone(), CourierTier::Verified, 1_750_000_000_000));
-        assert!(!store.deposit(build(3), depositor.clone(), CourierTier::Verified, 1_750_000_000_000));
+        assert!(store.deposit(
+            build(1),
+            depositor.clone(),
+            CourierTier::Verified,
+            1_750_000_000_000
+        ));
+        assert!(store.deposit(
+            build(2),
+            depositor.clone(),
+            CourierTier::Verified,
+            1_750_000_000_000
+        ));
+        assert!(!store.deposit(
+            build(3),
+            depositor.clone(),
+            CourierTier::Verified,
+            1_750_000_000_000
+        ));
         // Favorite depositor: max 5.
         let fav = vec![0x22u8; 32];
         for i in 10..15u8 {
-            assert!(store.deposit(build(i), fav.clone(), CourierTier::Favorite, 1_750_000_000_000));
+            assert!(store.deposit(
+                build(i),
+                fav.clone(),
+                CourierTier::Favorite,
+                1_750_000_000_000
+            ));
         }
-        assert!(!store.deposit(build(99), fav.clone(), CourierTier::Favorite, 1_750_000_000_000));
+        assert!(!store.deposit(
+            build(99),
+            fav.clone(),
+            CourierTier::Favorite,
+            1_750_000_000_000
+        ));
         assert_eq!(store.carried_count(), 7);
     }
 
@@ -549,8 +631,18 @@ mod tests {
         let day = CourierEnvelope::epoch_day(1_750_000_000);
         let tag = CourierEnvelope::recipient_tag(&recipient.noise_static_public(), day);
         let env = CourierEnvelope::new(tag.to_vec(), 1_750_000_100_000, vec![7u8; 64], 1, None);
-        store.deposit(env.clone(), vec![1; 32], CourierTier::Verified, 1_750_000_000_000);
-        store.deposit(CourierEnvelope::new(vec![9; 16], 1_750_000_100_000, vec![8u8; 64], 1, None), vec![1; 32], CourierTier::Verified, 1_750_000_000_000);
+        store.deposit(
+            env.clone(),
+            vec![1; 32],
+            CourierTier::Verified,
+            1_750_000_000_000,
+        );
+        store.deposit(
+            CourierEnvelope::new(vec![9; 16], 1_750_000_100_000, vec![8u8; 64], 1, None),
+            vec![1; 32],
+            CourierTier::Verified,
+            1_750_000_000_000,
+        );
         let tags = CourierEnvelope::candidate_tags(&recipient.noise_static_public(), 1_750_000_000);
         let taken = store.take_for_handover(&tags);
         assert_eq!(taken.len(), 1);
@@ -583,10 +675,15 @@ mod tests {
         let depositor = vec![0x11u8; 32];
         let courier = vec![0x33u8; 32];
         let env = CourierEnvelope::new(vec![1; 16], 1_750_000_100_000, vec![7u8; 64], 4, None);
-        assert!(store.deposit(env.clone(), depositor.clone(), CourierTier::Favorite, 1_750_000_000_000));
+        assert!(store.deposit(
+            env.clone(),
+            depositor.clone(),
+            CourierTier::Favorite,
+            1_750_000_000_000
+        ));
         let _ = store.transfer_spray_copies(&courier); // budget 4 -> 2
-        // Replayed deposit with the full budget: the store must not
-        // replenish the spent copies.
+                                                       // Replayed deposit with the full budget: the store must not
+                                                       // replenish the spent copies.
         assert!(store.deposit(env, depositor, CourierTier::Favorite, 1_750_000_000_001));
         let stored = &store.envelopes[0];
         assert_eq!(stored.copies, 2);

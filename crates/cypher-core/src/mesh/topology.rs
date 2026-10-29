@@ -221,7 +221,10 @@ mod tests {
         let many: Vec<[u8; 8]> = (0..15).map(|i| [i; 8]).collect();
         t.update_from_announce(id(1), &many, 1000);
         let info = t.nodes.get(&id(1)).unwrap();
-        assert_eq!(info.neighbors.len(), consts::TOPOLOGY_MAX_NEIGHBORS_PER_ANNOUNCE);
+        assert_eq!(
+            info.neighbors.len(),
+            consts::TOPOLOGY_MAX_NEIGHBORS_PER_ANNOUNCE
+        );
         assert!(!info.neighbors.contains(&id(1)));
     }
 }

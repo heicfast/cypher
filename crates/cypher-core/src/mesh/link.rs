@@ -83,15 +83,21 @@ pub enum LinkEvent {
 pub enum LinkCommand {
     /// Start scanning for our service UUID. `allow_duplicates` enables
     /// continuous discovery while the app is foregrounded.
-    StartScan { allow_duplicates: bool },
+    StartScan {
+        allow_duplicates: bool,
+    },
     StopScan,
     /// Start/stop advertising the service (advertising payload is the
     /// service UUID only — maximum privacy, exactly like bitchat).
     StartAdvertising,
     StopAdvertising,
     /// Central-role connection management.
-    Connect { peripheral: PeripheralId },
-    Disconnect { peripheral: PeripheralId },
+    Connect {
+        peripheral: PeripheralId,
+    },
+    Disconnect {
+        peripheral: PeripheralId,
+    },
     /// Write bytes on a link (write-without-response on central links;
     /// notify on peripheral links). The radio applies per-link backpressure.
     Write {
@@ -136,7 +142,12 @@ impl LinkCommand {
                 out.push(0x06);
                 out.extend_from_slice(&peripheral.to_le_bytes());
             }
-            LinkCommand::Write { link, direction, bytes, priority } => {
+            LinkCommand::Write {
+                link,
+                direction,
+                bytes,
+                priority,
+            } => {
                 out.push(0x07);
                 out.extend_from_slice(&link.to_le_bytes());
                 out.push(match direction {
@@ -163,4 +174,17 @@ pub struct DecodedFrame {
     pub packet: BitchatPacket,
     pub link: LinkId,
     pub direction: LinkDirection,
+}
+
+impl serde::Serialize for RadioState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            RadioState::Unknown => "unknown",
+            RadioState::Resetting => "resetting",
+            RadioState::Unsupported => "unsupported",
+            RadioState::Unauthorized => "unauthorized",
+            RadioState::PoweredOff => "poweredOff",
+            RadioState::PoweredOn => "poweredOn",
+        })
+    }
 }

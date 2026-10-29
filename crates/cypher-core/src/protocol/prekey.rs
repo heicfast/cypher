@@ -48,7 +48,11 @@ impl PrekeyBundle {
     /// generation time.
     pub fn signable_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(
-            1 + SIGNING_CONTEXT.len() + KEY_LENGTH + 1 + self.prekeys.len() * PREKEY_ENTRY_LENGTH + 8,
+            1 + SIGNING_CONTEXT.len()
+                + KEY_LENGTH
+                + 1
+                + self.prekeys.len() * PREKEY_ENTRY_LENGTH
+                + 8,
         );
         out.push(SIGNING_CONTEXT.len().min(255) as u8);
         out.extend_from_slice(&SIGNING_CONTEXT[..255.min(SIGNING_CONTEXT.len())]);
@@ -67,7 +71,10 @@ impl PrekeyBundle {
             || self.signature.len() != SIGNATURE_LENGTH
             || self.prekeys.is_empty()
             || self.prekeys.len() > MAX_PREKEYS
-            || self.prekeys.iter().any(|p| p.public_key.len() != KEY_LENGTH)
+            || self
+                .prekeys
+                .iter()
+                .any(|p| p.public_key.len() != KEY_LENGTH)
         {
             return None;
         }
@@ -76,7 +83,8 @@ impl PrekeyBundle {
             be::put_u32(&mut entries, prekey.id);
             entries.extend_from_slice(&prekey.public_key);
         }
-        let mut encoded = Vec::with_capacity(4 * 3 + KEY_LENGTH + entries.len() + 8 + SIGNATURE_LENGTH);
+        let mut encoded =
+            Vec::with_capacity(4 * 3 + KEY_LENGTH + entries.len() + 8 + SIGNATURE_LENGTH);
         write_long(&mut encoded, 0x01, &self.noise_static_public_key);
         write_long(&mut encoded, 0x02, &entries);
         write_long(&mut encoded, 0x03, &self.generated_at.to_be_bytes());
@@ -154,7 +162,11 @@ impl PrekeyBundle {
 
     /// Verify the bundle's Ed25519 signature against the owner's signing key.
     pub fn verify_signature(&self, signing_public_key: &[u8; 32]) -> bool {
-        crate::identity::CypherIdentity::verify(&self.signature, &self.signable_bytes(), signing_public_key)
+        crate::identity::CypherIdentity::verify(
+            &self.signature,
+            &self.signable_bytes(),
+            signing_public_key,
+        )
     }
 }
 
@@ -168,7 +180,10 @@ mod tests {
         for i in 0..3u32 {
             let mut key = vec![0u8; 32];
             key.copy_from_slice(&crate::util::sha256(&i.to_be_bytes()));
-            prekeys.push(Prekey { id: i, public_key: key });
+            prekeys.push(Prekey {
+                id: i,
+                public_key: key,
+            });
         }
         let mut bundle = PrekeyBundle {
             noise_static_public_key: owner.noise_static_public().to_vec(),

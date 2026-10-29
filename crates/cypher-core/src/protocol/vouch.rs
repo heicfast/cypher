@@ -61,7 +61,9 @@ impl VouchAttestation {
             match tag {
                 0x01 if value.len() == FINGERPRINT_LENGTH => fingerprint = Some(value.to_vec()),
                 0x02 if value.len() == SIGNING_KEY_LENGTH => signing_key = Some(value.to_vec()),
-                0x03 if value.len() == 8 => timestamp_ms = Some(u64::from_be_bytes(value.try_into().ok()?)),
+                0x03 if value.len() == 8 => {
+                    timestamp_ms = Some(u64::from_be_bytes(value.try_into().ok()?))
+                }
                 0x04 if value.len() == SIGNATURE_LENGTH => signature = Some(value.to_vec()),
                 _ => {} // skip unknown
             }
@@ -76,7 +78,11 @@ impl VouchAttestation {
 
     /// Verify the voucher's Ed25519 signature.
     pub fn verify_signature(&self, voucher_signing_key: &[u8; 32]) -> bool {
-        crate::identity::CypherIdentity::verify(&self.signature, &self.signable_bytes(), voucher_signing_key)
+        crate::identity::CypherIdentity::verify(
+            &self.signature,
+            &self.signable_bytes(),
+            voucher_signing_key,
+        )
     }
 
     /// Freshness: within the 30-day window with 1 h clock-skew tolerance.
@@ -181,13 +187,17 @@ mod tests {
         let encoded = encode_batch(&batch).unwrap();
         let decoded = decode_batch(&encoded);
         assert_eq!(decoded.len(), 5);
-        assert!(decoded.iter().all(|a| a.verify_signature(&voucher.signing_public())));
+        assert!(decoded
+            .iter()
+            .all(|a| a.verify_signature(&voucher.signing_public())));
         // Oversized batch rejected at encode.
-        let too_many: Vec<VouchAttestation> = (0..17).map(|i| {
-            let mut a = sample(&voucher, &voucher);
-            a.timestamp_ms = i;
-            a
-        }).collect();
+        let too_many: Vec<VouchAttestation> = (0..17)
+            .map(|i| {
+                let mut a = sample(&voucher, &voucher);
+                a.timestamp_ms = i;
+                a
+            })
+            .collect();
         assert!(encode_batch(&too_many).is_none());
         // Malformed entries skipped on decode.
         let mut bad = encoded.clone();

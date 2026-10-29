@@ -94,7 +94,8 @@ pub fn content_hash_key(normalized: &str) -> String {
 /// Big-endian readers/writers over a byte buffer (BinaryProtocol is BE everywhere).
 pub mod be {
     pub fn u16(buf: &[u8], off: usize) -> Option<u16> {
-        buf.get(off..off + 2).map(|b| u16::from_be_bytes([b[0], b[1]]))
+        buf.get(off..off + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
     }
     pub fn u32(buf: &[u8], off: usize) -> Option<u32> {
         buf.get(off..off + 4)

@@ -56,14 +56,20 @@ pub fn chunk_size(route_hops: usize, requested_max: Option<usize>) -> usize {
         consts::BLE_DEFAULT_FRAGMENT_SIZE
     };
     match requested_max {
-        Some(max) => max.max(consts::FRAGMENT_MIN_CHUNK).min(calculated.max(consts::FRAGMENT_MIN_CHUNK)),
+        Some(max) => max
+            .max(consts::FRAGMENT_MIN_CHUNK)
+            .min(calculated.max(consts::FRAGMENT_MIN_CHUNK)),
         None => calculated.max(consts::FRAGMENT_MIN_CHUNK),
     }
 }
 
 /// Plan the fragment train for an outbound packet. Returns the fragment
 /// packets (unencoded) in send order.
-pub fn plan_fragments(packet: &BitchatPacket, requested_max_chunk: Option<usize>, now_ms: u64) -> Option<Vec<BitchatPacket>> {
+pub fn plan_fragments(
+    packet: &BitchatPacket,
+    requested_max_chunk: Option<usize>,
+    now_ms: u64,
+) -> Option<Vec<BitchatPacket>> {
     // Large payloads cannot ride a v1 frame (u16 payload region); big
     // packets ship as v2 exactly like bitchat's fileTransfer / privateFile.
     let mut packet = packet.clone();
@@ -107,7 +113,9 @@ pub fn plan_fragments(packet: &BitchatPacket, requested_max_chunk: Option<usize>
             MessageType::Fragment.as_u8(),
             packet.sender_id,
             // Directed: the target peer; broadcast: the FF marker.
-            packet.recipient_id.or(Some(crate::PeerId::broadcast_marker())),
+            packet
+                .recipient_id
+                .or(Some(crate::PeerId::broadcast_marker())),
             packet.timestamp,
             payload,
             packet.ttl,
@@ -171,7 +179,9 @@ impl FragmentAssemblyBuffer {
 
         // Capacity: starting a new assembly while at the in-flight limit
         // evicts the oldest first (bitchat evicts before inserting).
-        if !self.assemblies.contains_key(&key) && self.assemblies.len() >= consts::BLE_MAX_IN_FLIGHT_ASSEMBLIES {
+        if !self.assemblies.contains_key(&key)
+            && self.assemblies.len() >= consts::BLE_MAX_IN_FLIGHT_ASSEMBLIES
+        {
             if let Some(oldest) = self
                 .assemblies
                 .iter()
@@ -201,7 +211,8 @@ impl FragmentAssemblyBuffer {
             .map(|v| v.len())
             .sum::<usize>()
             .saturating_sub(entry.held.get(&header.index).map_or(0, |v| v.len()))
-            + packet.payload.len() - FragmentHeader::MIN_BYTES;
+            + packet.payload.len()
+            - FragmentHeader::MIN_BYTES;
         if projected + limits::MAX_FRAME_OVERHEAD_BYTES > max_frame {
             self.remove(&key);
             return Some(AssemblyOutcome::Oversized);
@@ -209,7 +220,10 @@ impl FragmentAssemblyBuffer {
 
         // A new index resets the stall clock; re-delivery does not.
         let is_new_index = !entry.held.contains_key(&header.index);
-        entry.held.insert(header.index, packet.payload[FragmentHeader::MIN_BYTES..].to_vec());
+        entry.held.insert(
+            header.index,
+            packet.payload[FragmentHeader::MIN_BYTES..].to_vec(),
+        );
         if is_new_index {
             entry.last_fragment_ms = now_ms;
         }

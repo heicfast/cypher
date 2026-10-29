@@ -45,10 +45,12 @@ pub fn evaluate(
     if packet.packet_type != MessageType::Announce.as_u8() {
         return Err(AnnounceRejection::Malformed);
     }
-    let announcement = AnnouncementPacket::decode(&packet.payload).ok_or(AnnounceRejection::Malformed)?;
+    let announcement =
+        AnnouncementPacket::decode(&packet.payload).ok_or(AnnounceRejection::Malformed)?;
 
     // Derived peer ID must equal the packet's claimed sender.
-    let Ok(noise_key): Result<[u8; 32], _> = announcement.noise_public_key.clone().try_into() else {
+    let Ok(noise_key): Result<[u8; 32], _> = announcement.noise_public_key.clone().try_into()
+    else {
         return Err(AnnounceRejection::Malformed);
     };
     let derived = crate::PeerId::from_public_key(&noise_key);
@@ -70,7 +72,8 @@ pub fn evaluate(
             return Err(AnnounceRejection::KeyMismatch);
         }
     }
-    let Ok(signing_key): Result<[u8; 32], _> = announcement.signing_public_key.clone().try_into() else {
+    let Ok(signing_key): Result<[u8; 32], _> = announcement.signing_public_key.clone().try_into()
+    else {
         return Err(AnnounceRejection::Malformed);
     };
     if let Some(authenticated) = authenticated_signing_key {
@@ -114,12 +117,18 @@ impl AnnounceThrottle {
     pub fn may_send(&self, forced: bool, now_ms: u64) -> bool {
         if forced {
             match self.last_forced_ms {
-                Some(last) => now_ms.saturating_sub(last) >= (consts::BLE_FORCE_ANNOUNCE_MIN_INTERVAL_S * 1000.0) as u64,
+                Some(last) => {
+                    now_ms.saturating_sub(last)
+                        >= (consts::BLE_FORCE_ANNOUNCE_MIN_INTERVAL_S * 1000.0) as u64
+                }
                 None => true,
             }
         } else {
             match self.last_sent_ms {
-                Some(last) => now_ms.saturating_sub(last) >= (consts::BLE_ANNOUNCE_MIN_INTERVAL_S * 1000.0) as u64,
+                Some(last) => {
+                    now_ms.saturating_sub(last)
+                        >= (consts::BLE_ANNOUNCE_MIN_INTERVAL_S * 1000.0) as u64
+                }
                 None => true,
             }
         }
@@ -154,9 +163,15 @@ pub fn should_announce(
         return elapsed_since_last_s >= 10.0;
     }
     let (base, jitter) = if connected_count >= consts::BLE_HIGH_DEGREE_THRESHOLD {
-        (consts::BLE_ANNOUNCE_INTERVAL_CONNECTED_DENSE_S, consts::BLE_ANNOUNCE_JITTER_DENSE_S)
+        (
+            consts::BLE_ANNOUNCE_INTERVAL_CONNECTED_DENSE_S,
+            consts::BLE_ANNOUNCE_JITTER_DENSE_S,
+        )
     } else {
-        (consts::BLE_ANNOUNCE_INTERVAL_CONNECTED_SPARSE_S, consts::BLE_ANNOUNCE_JITTER_SPARSE_S)
+        (
+            consts::BLE_ANNOUNCE_INTERVAL_CONNECTED_SPARSE_S,
+            consts::BLE_ANNOUNCE_JITTER_SPARSE_S,
+        )
     };
     let _ = cycle;
     elapsed_since_last_s >= base - jitter
@@ -174,7 +189,11 @@ pub fn build_payload(
         nickname: nickname.to_string(),
         noise_public_key: noise_public_key.to_vec(),
         signing_public_key: signing_public_key.to_vec(),
-        direct_neighbors: if neighbors.is_empty() { None } else { Some(neighbors.to_vec()) },
+        direct_neighbors: if neighbors.is_empty() {
+            None
+        } else {
+            Some(neighbors.to_vec())
+        },
         capabilities: Some(capabilities),
         bridge_geohash: None,
     };
@@ -186,7 +205,12 @@ mod tests {
     use super::*;
     use crate::packet::BitchatPacket;
 
-    fn signed_announce(identity: &crate::identity::CypherIdentity, nickname: &str, ttl: u8, now_ms: u64) -> BitchatPacket {
+    fn signed_announce(
+        identity: &crate::identity::CypherIdentity,
+        nickname: &str,
+        ttl: u8,
+        now_ms: u64,
+    ) -> BitchatPacket {
         let payload = build_payload(
             nickname,
             &identity.noise_static_public(),
@@ -266,7 +290,7 @@ mod tests {
         // the keys would read as IdentityMismatch/Malformed first, since the
         // identity check precedes signature verification.)
         let mut tampered = packet.clone();
-        tampered.payload[4] = b'L'; // 'a' -> 'L' in "alice" 
+        tampered.payload[4] = b'L'; // 'a' -> 'L' in "alice"
         assert_eq!(
             evaluate(&tampered, None, None, None, &local, 2000),
             Err(AnnounceRejection::InvalidSignature)

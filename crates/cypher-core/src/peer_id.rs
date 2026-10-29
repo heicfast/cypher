@@ -75,7 +75,9 @@ impl PeerId {
     pub fn short(&self) -> PeerId {
         let bare = self.bare();
         if bare.len() == 16 {
-            return PeerId { id: bare.to_string() };
+            return PeerId {
+                id: bare.to_string(),
+            };
         }
         PeerId {
             id: bare.chars().take(16).collect(),
@@ -84,7 +86,13 @@ impl PeerId {
 
     /// Bare form without the prefix.
     pub fn bare(&self) -> &str {
-        for p in [PeerPrefix::Mesh, PeerPrefix::Name, PeerPrefix::Noise, PeerPrefix::Group, PeerPrefix::Bridge] {
+        for p in [
+            PeerPrefix::Mesh,
+            PeerPrefix::Name,
+            PeerPrefix::Noise,
+            PeerPrefix::Group,
+            PeerPrefix::Bridge,
+        ] {
             if let Some(rest) = self.id.strip_prefix(p.as_str()) {
                 return rest;
             }
@@ -129,14 +137,25 @@ impl PeerId {
         let mut b = [0u8; PEER_ID_WIRE_BYTES];
         let n = bytes.len().min(PEER_ID_WIRE_BYTES);
         b[..n].copy_from_slice(&bytes[..n]);
-        PeerId {
-            id: hex_encode(&b),
-        }
+        PeerId { id: hex_encode(&b) }
     }
 
     /// Broadcast recipient marker (`FF` × 8) used on fragment packets.
     pub fn broadcast_marker() -> [u8; PEER_ID_WIRE_BYTES] {
         [0xFF; PEER_ID_WIRE_BYTES]
+    }
+}
+
+impl serde::Serialize for PeerId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.id)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PeerId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(PeerId::new(s))
     }
 }
 
@@ -185,9 +204,7 @@ mod tests {
         assert_eq!(g.bare(), "abcdef0123456789abcdef0123456789");
         let n = PeerId::new("noise:");
         let _ = n;
-        let full = PeerId::new(
-            "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
-        );
+        let full = PeerId::new("a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf");
         assert!(full.is_full_noise_key());
         assert_eq!(full.short().as_str(), "a0a1a2a3a4a5a6a7");
     }

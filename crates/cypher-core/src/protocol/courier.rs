@@ -168,7 +168,9 @@ impl CourierEnvelope {
 
     /// Does this envelope match any of the given candidate tags?
     pub fn matches_any(&self, candidates: &[[u8; TAG_LENGTH]]) -> bool {
-        candidates.iter().any(|t| t.as_slice() == self.rec_tag_slice())
+        candidates
+            .iter()
+            .any(|t| t.as_slice() == self.rec_tag_slice())
     }
 
     fn rec_tag_slice(&self) -> &[u8] {
@@ -224,15 +226,25 @@ mod tests {
     #[test]
     fn copies_clamped_never_rejected() {
         let (tag, ciphertext, expiry, _) = vector_inputs();
-        assert_eq!(CourierEnvelope::new(tag.clone(), expiry, ciphertext.clone(), 0, None).copies, 1);
-        assert_eq!(CourierEnvelope::new(tag.clone(), expiry, ciphertext.clone(), 4, None).copies, 4);
-        assert_eq!(CourierEnvelope::new(tag, expiry, ciphertext, 200, None).copies, 8);
+        assert_eq!(
+            CourierEnvelope::new(tag.clone(), expiry, ciphertext.clone(), 0, None).copies,
+            1
+        );
+        assert_eq!(
+            CourierEnvelope::new(tag.clone(), expiry, ciphertext.clone(), 4, None).copies,
+            4
+        );
+        assert_eq!(
+            CourierEnvelope::new(tag, expiry, ciphertext, 200, None).copies,
+            8
+        );
     }
 
     #[test]
     fn golden_recipient_tag() {
         let (_, _, _, epoch_day) = vector_inputs();
-        let key = hex_decode("a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf").unwrap();
+        let key =
+            hex_decode("a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf").unwrap();
         let tag = CourierEnvelope::recipient_tag(&key, epoch_day);
         assert_eq!(
             crate::util::hex_encode(&tag),

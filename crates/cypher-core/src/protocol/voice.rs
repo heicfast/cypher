@@ -96,7 +96,33 @@ impl VoiceBurstPacket {
         let burst_id = data[..8].try_into().ok()?;
         let seq = u16::from_be_bytes(data[8..10].try_into().ok()?);
         let flags = data[10];
+        // Swift decode: any flags byte outside {DATA, START, END, CANCELED}
+        // is rejected outright.
+        if ![FLAG_DATA, FLAG_START, FLAG_END, FLAG_CANCELED].contains(&flags) {
+            return None;
+        }
         let payload = data[11..].to_vec();
+        // Per-kind payload validation at decode time (Swift VoiceBurstPacket
+        // decode: START requires a valid codec; DATA must parse frames and
+        // be non-empty; END requires ≥ 6 bytes for total+duration).
+        match flags {
+            FLAG_START => {
+                if payload.first() != Some(&CODEC_AAC_LC) {
+                    return None;
+                }
+            }
+            FLAG_DATA => {
+                let packet = VoiceBurstPacket {
+                    burst_id,
+                    seq,
+                    flags,
+                    payload: payload.clone(),
+                };
+                packet.decode_frames()?;
+            }
+            FLAG_END if payload.len() < 6 => return None,
+            _ => {}
+        }
         Some(VoiceBurstPacket {
             burst_id,
             seq,
@@ -183,11 +209,14 @@ mod tests {
         // Swift's encode() never fails: the 210-byte budget is the
         // outgoing packetizer's rule, not a codec constraint. Inbound
         // flood accounting depends on this (receivedBytes += encoded).
+        // 8 frames x 30 B = 256 payload bytes (> 210), valid length
+        // prefixes, decodable per the DATA-kind rules.
         let id = [2u8; 8];
-        let mut pkt = VoiceBurstPacket::data(id, 1, &[vec![0xAA; 100]]).unwrap();
-        pkt.payload = vec![0xBB; MAX_BURST_CONTENT_BYTES + 1];
+        let frames: Vec<Vec<u8>> = (0..8).map(|i| vec![0xB0 + i as u8; 30]).collect();
+        let pkt = VoiceBurstPacket::data(id, 1, &frames).unwrap();
         let encoded = pkt.encode().expect("encode is total");
-        assert_eq!(encoded.len(), 11 + MAX_BURST_CONTENT_BYTES + 1);
+        assert_eq!(encoded.len(), 11 + 256);
+        assert!(encoded.len() - 11 > MAX_BURST_CONTENT_BYTES);
         assert_eq!(VoiceBurstPacket::decode(&encoded).unwrap(), pkt);
     }
 }

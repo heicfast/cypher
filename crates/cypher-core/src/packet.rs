@@ -128,6 +128,25 @@ impl BitchatPacket {
     }
 }
 
+/// Content-derived identity for public mesh messages (Swift
+/// `MeshMessageIdentity`): the wire carries no message ID for public
+/// broadcasts, so every device recomputes the same stable ID from the
+/// signed wire fields. A radio copy that is already present upstream can
+/// be detected — but only as a hint, never as an authenticated dedup slot.
+pub fn mesh_message_identity(sender_id_hex: &str, timestamp_ms: u64, content: &str) -> String {
+    let trimmed: String = content
+        .trim_matches(|c: char| c.is_whitespace() || c == '\n' || c == '\r')
+        .to_string();
+    let input = format!(
+        "{}|{}|{}",
+        sender_id_hex.to_lowercase(),
+        timestamp_ms,
+        trimmed
+    );
+    let digest = crate::util::sha256(input.as_bytes());
+    crate::util::hex_encode(&digest)[..32].to_string()
+}
+
 /// Binary wire codec. All multi-byte values big-endian.
 pub struct BinaryProtocol;
 

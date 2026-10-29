@@ -131,6 +131,10 @@ impl GcsFilter {
     /// Encode `ids` (any order) with Golomb-Rice parameter `p`.
     /// Returns `(encoded_bitstream, m)` with `M = min(N·2^P, u32::MAX)`.
     pub fn encode_ids(ids: &[[u8; 16]], p: u8) -> (Vec<u8>, u32) {
+        // Swift GCSFilter rejects p outside 1...maxP (32) at construction.
+        if p == 0 || p > consts::SYNC_GCS_MAX_P {
+            return (Vec::new(), 0);
+        }
         let n = ids.len().max(1) as u64;
         let m = (n << p.min(32)).min(u32::MAX as u64) as u32;
         Self::encode_ids_exact(ids, p, m)
@@ -139,6 +143,10 @@ impl GcsFilter {
     /// Decode a bitstream back to the sorted bucket values. Truncated input
     /// returns only the completely decoded values.
     pub fn decode_ids(data: &[u8], p: u8, m: u32) -> Vec<u64> {
+        // Swift rejects p outside 1...maxP (32) and m in {0, 1, u32::MAX}.
+        if p == 0 || p > consts::SYNC_GCS_MAX_P || m == 0 || m == 1 || m == u32::MAX {
+            return Vec::new();
+        }
         let mut out = Vec::new();
         let mut r = BitReader { data, pos: 0 };
         let mut prev: u64 = 0;

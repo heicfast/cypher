@@ -12,6 +12,8 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use x25519_dalek::{PublicKey, StaticSecret};
 
+pub mod rotation;
+
 use crate::util::{hex_encode, sha256_fingerprint};
 
 /// Ed25519 signature length.

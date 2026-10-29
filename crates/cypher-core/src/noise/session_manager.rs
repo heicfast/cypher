@@ -104,7 +104,10 @@ pub struct HandshakeRecoveryRequest {
 
 impl HandshakeRecoveryRequest {
     pub fn new(peer_id: PeerId, recovery_id: RecoveryId) -> Self {
-        Self { peer_id, recovery_id }
+        Self {
+            peer_id,
+            recovery_id,
+        }
     }
 }
 
@@ -130,7 +133,11 @@ pub enum RestoreReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TimerKind {
     /// Ordinary initiator bound. `notify`: emit SessionFailed on expiry.
-    InitiatorTimeout { peer: PeerId, epoch: Epoch, notify: bool },
+    InitiatorTimeout {
+        peer: PeerId,
+        epoch: Epoch,
+        notify: bool,
+    },
     /// Responder window. The deadline keeps the quarantine rollback
     /// window when present; duplicates never extend it.
     ResponderTimeout {
@@ -141,8 +148,13 @@ enum TimerKind {
         created_by_yield: bool,
     },
     /// Deferred crossed-initiation recovery after initiator completion.
-    SuppressedInitiationRecovery { peer: PeerId, established_epoch: Epoch },
-    /// Transport callback for a recovery request.
+    SuppressedInitiationRecovery {
+        peer: PeerId,
+        established_epoch: Epoch,
+    },
+    /// Transport callback for a recovery request (Swift
+    /// scheduleRecoveryCallback; surfaced for engine wiring).
+    #[allow(dead_code)]
     RecoveryCallback { peer: PeerId, callback: CallbackId },
     /// Redispatch of a rate-limited / failed recovery attempt.
     DelayedRecoveryRedispatch { peer: PeerId, recovery: RecoveryId },
@@ -184,8 +196,13 @@ pub enum ManagerEvent {
         generation: GenerationId,
         reason: RestoreReason,
     },
-    SessionFailed { peer: PeerId, error: NoiseError },
-    HandshakeRecoveryRequired { request: HandshakeRecoveryRequest },
+    SessionFailed {
+        peer: PeerId,
+        error: NoiseError,
+    },
+    HandshakeRecoveryRequired {
+        request: HandshakeRecoveryRequest,
+    },
 }
 
 pub struct SessionManager {
@@ -271,11 +288,7 @@ impl SessionManager {
 
     // ---- active-table install/remove -------------------------------------
 
-    fn install_session(
-        &mut self,
-        peer: &PeerId,
-        session: NoiseSession,
-    ) -> (Epoch, GenerationId) {
+    fn install_session(&mut self, peer: &PeerId, session: NoiseSession) -> (Epoch, GenerationId) {
         let epoch = self.next_epoch();
         let generation = GenerationId(self.next_id());
         self.session_epochs.insert(peer.clone(), epoch);
@@ -346,7 +359,9 @@ impl SessionManager {
     }
 
     pub fn get_remote_static_key(&self, peer: &PeerId) -> Option<[u8; 32]> {
-        self.sessions.get(peer).and_then(|s| s.get_remote_static_public_key())
+        self.sessions
+            .get(peer)
+            .and_then(|s| s.get_remote_static_public_key())
     }
 
     pub fn sessions_needing_rekey(&self) -> Vec<(PeerId, bool)> {
@@ -414,7 +429,10 @@ impl SessionManager {
         let (epoch, _gen) = self.install_session(peer, session);
         self.initiation_tokens.insert(peer.clone(), attempt);
         self.arm_initiator_timeout(peer, epoch, notify_on_timeout);
-        Ok(Some(HandshakeInitiation { payload, attempt_id: attempt }))
+        Ok(Some(HandshakeInitiation {
+            payload,
+            attempt_id: attempt,
+        }))
     }
 
     /// Swift `initiateReconnectHandshake` — rekey/restart: prepare first,
@@ -446,7 +464,10 @@ impl SessionManager {
         let attempt = AttemptId(self.next_id());
         self.initiation_tokens.insert(peer.clone(), attempt);
         self.arm_initiator_timeout(peer, epoch, notify_on_timeout);
-        Ok(HandshakeInitiation { payload, attempt_id: attempt })
+        Ok(HandshakeInitiation {
+            payload,
+            attempt_id: attempt,
+        })
     }
 
     pub fn initiate_rekey(&mut self, peer: &PeerId) -> Result<HandshakeInitiation, NoiseError> {
@@ -479,7 +500,6 @@ impl SessionManager {
         Some(initiation.payload.clone())
     }
 
-
     // ---- ingress state machine ---------------------------------------------
 
     /// Swift `handleIncomingHandshakeWithResult` — the core ingress path
@@ -499,7 +519,7 @@ impl SessionManager {
 
         // Fresh-initiation classifier (Swift MGR:546-553).
         let is_fresh_initiation = message.len() == consts::NOISE_XX_INITIAL_MESSAGE_SIZE
-            || self.sessions.get(peer).is_none()
+            || !self.sessions.contains_key(peer)
             || (existing_established && message.len() > consts::NOISE_XX_INITIAL_MESSAGE_SIZE);
 
         if is_fresh_initiation {
@@ -669,7 +689,11 @@ impl SessionManager {
                     let e = NoiseError::PeerIdentityMismatch;
                     return Err(self.fail_current_session(peer, now, e));
                 }
-                let generation = self.generations.get(peer).copied().unwrap_or(GenerationId(0));
+                let generation = self
+                    .generations
+                    .get(peer)
+                    .copied()
+                    .unwrap_or(GenerationId(0));
                 // Clear quarantine + cooldown + token + timers.
                 if let Some(mut q) = self.quarantined.remove(peer) {
                     q.session.reset();
@@ -696,7 +720,11 @@ impl SessionManager {
     }
 
     /// Swift `handleIncomingHandshake` — response bytes only.
-    pub fn handle_incoming(&mut self, peer: &PeerId, message: &[u8]) -> Result<Option<Vec<u8>>, NoiseError> {
+    pub fn handle_incoming(
+        &mut self,
+        peer: &PeerId,
+        message: &[u8],
+    ) -> Result<Option<Vec<u8>>, NoiseError> {
         self.handle_incoming_with_result(peer, message)
             .map(|r| r.response)
     }
@@ -723,7 +751,12 @@ impl SessionManager {
     /// buffer the restore/failed events, and return the error the caller
     /// should see — `ManagedHandshakeFailure` when the manager owns
     /// recovery, so the caller does not spin its own retries.
-    fn fail_current_session(&mut self, peer: &PeerId, now: u64, underlying: NoiseError) -> NoiseError {
+    fn fail_current_session(
+        &mut self,
+        peer: &PeerId,
+        now: u64,
+        underlying: NoiseError,
+    ) -> NoiseError {
         let is_identity_mismatch = underlying == NoiseError::PeerIdentityMismatch;
         self.drop_current_session(peer);
         let owns_recovery = self.responders_created_by_yield.remove(peer)
@@ -764,8 +797,10 @@ impl SessionManager {
     }
 
     fn mark_rollback_cooldown(&mut self, peer: &PeerId, now: u64) {
-        self.rollback_cooldown_until
-            .insert(peer.clone(), now + (self.config.rollback_cooldown_s * 1000.0) as u64);
+        self.rollback_cooldown_until.insert(
+            peer.clone(),
+            now + (self.config.rollback_cooldown_s * 1000.0) as u64,
+        );
     }
 
     // ---- transport -----------------------------------------------------------
@@ -795,7 +830,7 @@ impl SessionManager {
     }
 
     pub fn decrypt(&mut self, ciphertext: &[u8], peer: &PeerId) -> Result<Vec<u8>, NoiseError> {
-        self.decrypt_with_session_generation(ciphertext, peer, &|_| true, || Ok(()))
+        self.decrypt_with_session_generation(ciphertext, peer, |_| true, || Ok(()))
             .map(|(pt, _)| pt)
     }
 
@@ -822,7 +857,11 @@ impl SessionManager {
                 return Err(NoiseError::SessionNotFound);
             };
             if session.is_established() {
-                let gen = self.generations.get(peer).copied().unwrap_or(GenerationId(0));
+                let gen = self
+                    .generations
+                    .get(peer)
+                    .copied()
+                    .unwrap_or(GenerationId(0));
                 if !established_generation_is_ready(gen) {
                     return Err(NoiseError::TransportGenerationNotReady);
                 }
@@ -984,9 +1023,9 @@ impl SessionManager {
 
     fn arm_initiator_timeout(&mut self, peer: &PeerId, epoch: Epoch, notify: bool) {
         let now = self.now_ms();
-        self.timers.retain(|t| {
-            !matches!(&t.kind, TimerKind::InitiatorTimeout { peer: p, .. } if p == peer)
-        });
+        self.timers.retain(
+            |t| !matches!(&t.kind, TimerKind::InitiatorTimeout { peer: p, .. } if p == peer),
+        );
         self.timers.push(Timer {
             kind: TimerKind::InitiatorTimeout {
                 peer: peer.clone(),
@@ -995,7 +1034,8 @@ impl SessionManager {
             },
             fire_at_ms: now + (self.config.handshake_timeout_s * 1000.0) as u64,
         });
-        self.initiator_retry_notifications.insert(peer.clone(), notify);
+        self.initiator_retry_notifications
+            .insert(peer.clone(), notify);
     }
 
     fn arm_responder_timeout(
@@ -1006,9 +1046,9 @@ impl SessionManager {
         notify: bool,
         created_by_yield: bool,
     ) {
-        self.timers.retain(|t| {
-            !matches!(&t.kind, TimerKind::ResponderTimeout { peer: p, .. } if p == peer)
-        });
+        self.timers.retain(
+            |t| !matches!(&t.kind, TimerKind::ResponderTimeout { peer: p, .. } if p == peer),
+        );
         self.timers.push(Timer {
             kind: TimerKind::ResponderTimeout {
                 peer: peer.clone(),
@@ -1051,7 +1091,11 @@ impl SessionManager {
         self.timers.retain(|t| t.fire_at_ms > now);
         for timer in due {
             match timer.kind {
-                TimerKind::InitiatorTimeout { peer, epoch, notify } => {
+                TimerKind::InitiatorTimeout {
+                    peer,
+                    epoch,
+                    notify,
+                } => {
                     let current_epoch = self.session_epochs.get(&peer).copied();
                     let is_live_initiator = matches!(
                         self.sessions.get(&peer),
@@ -1068,7 +1112,13 @@ impl SessionManager {
                         });
                     }
                 }
-                TimerKind::ResponderTimeout { peer, epoch, deadline_ms, notify, created_by_yield: _ } => {
+                TimerKind::ResponderTimeout {
+                    peer,
+                    epoch,
+                    deadline_ms: _,
+                    notify,
+                    created_by_yield: _,
+                } => {
                     let current_epoch = self.session_epochs.get(&peer).copied();
                     let is_live_responder = matches!(
                         self.sessions.get(&peer),
@@ -1083,10 +1133,10 @@ impl SessionManager {
                     if let Some(q) = self.quarantined.remove(&peer) {
                         let gen = q.generation;
                         let epoch = q.epoch;
-                        let mut q_session = q.session;
+                        let q_session = q.session;
                         self.session_epochs.insert(peer.clone(), epoch);
                         self.sessions.insert(peer.clone(), q_session);
-                                    self.generations.insert(peer.clone(), gen);
+                        self.generations.insert(peer.clone(), gen);
                         self.mark_rollback_cooldown(&peer, now);
                         restored = Some((gen, RestoreReason::PendingConvergence));
                     }
@@ -1106,21 +1156,30 @@ impl SessionManager {
                     // A rollback always owns one local convergence attempt.
                     let recovery = RecoveryId(self.next_id());
                     self.pending_recovery_ids.insert(peer.clone(), recovery);
-                    self.pending_events.push(ManagerEvent::HandshakeRecoveryRequired {
-                        request: HandshakeRecoveryRequest::new(peer.clone(), recovery),
-                    });
+                    self.pending_events
+                        .push(ManagerEvent::HandshakeRecoveryRequired {
+                            request: HandshakeRecoveryRequest::new(peer.clone(), recovery),
+                        });
                 }
-                TimerKind::SuppressedInitiationRecovery { peer, established_epoch } => {
+                TimerKind::SuppressedInitiationRecovery {
+                    peer,
+                    established_epoch,
+                } => {
                     let still = self.session_epochs.get(&peer).copied() == Some(established_epoch)
-                        && self.sessions.get(&peer).map(|s| s.is_established()).unwrap_or(false);
+                        && self
+                            .sessions
+                            .get(&peer)
+                            .map(|s| s.is_established())
+                            .unwrap_or(false);
                     if !still {
                         continue;
                     }
                     let recovery = RecoveryId(self.next_id());
                     self.pending_recovery_ids.insert(peer.clone(), recovery);
-                    self.pending_events.push(ManagerEvent::HandshakeRecoveryRequired {
-                        request: HandshakeRecoveryRequest::new(peer.clone(), recovery),
-                    });
+                    self.pending_events
+                        .push(ManagerEvent::HandshakeRecoveryRequired {
+                            request: HandshakeRecoveryRequest::new(peer.clone(), recovery),
+                        });
                 }
                 TimerKind::RecoveryCallback { peer, callback } => {
                     if self.recovery_callbacks_fired.contains(&callback) {
@@ -1129,9 +1188,10 @@ impl SessionManager {
                     self.recovery_callbacks_fired.insert(callback);
                     let recovery = RecoveryId(self.next_id());
                     self.pending_recovery_ids.insert(peer.clone(), recovery);
-                    self.pending_events.push(ManagerEvent::HandshakeRecoveryRequired {
-                        request: HandshakeRecoveryRequest::new(peer.clone(), recovery),
-                    });
+                    self.pending_events
+                        .push(ManagerEvent::HandshakeRecoveryRequired {
+                            request: HandshakeRecoveryRequest::new(peer.clone(), recovery),
+                        });
                 }
                 TimerKind::DelayedRecoveryRedispatch { peer, recovery } => {
                     // The manager retries its own recovery after the head
@@ -1139,12 +1199,18 @@ impl SessionManager {
                     if self.pending_recovery_ids.get(&peer) != Some(&recovery) {
                         continue;
                     }
-                    if self.sessions.get(&peer).map(|s| s.is_handshaking()).unwrap_or(false) {
+                    if self
+                        .sessions
+                        .get(&peer)
+                        .map(|s| s.is_handshaking())
+                        .unwrap_or(false)
+                    {
                         continue;
                     }
-                    self.pending_events.push(ManagerEvent::HandshakeRecoveryRequired {
-                        request: HandshakeRecoveryRequest::new(peer.clone(), recovery),
-                    });
+                    self.pending_events
+                        .push(ManagerEvent::HandshakeRecoveryRequired {
+                            request: HandshakeRecoveryRequest::new(peer.clone(), recovery),
+                        });
                 }
             }
         }
@@ -1225,7 +1291,7 @@ mod tests {
             .encrypt_with_generation(b"ping", &b_id, gen_a)
             .expect("pinned encrypt");
         let (pt, gen_used) = b
-            .decrypt_with_session_generation(&ct, &a_id, &|_| true, || Ok(()))
+            .decrypt_with_session_generation(&ct, &a_id, |_| true, || Ok(()))
             .expect("pinned decrypt");
         assert_eq!(pt, b"ping");
         assert_eq!(gen_used, gen_b);
@@ -1249,7 +1315,11 @@ mod tests {
 
         // Establish an A↔B session the normal way.
         let m1 = a.initiate_handshake(&b_id).unwrap();
-        let m2 = b.handle_incoming_with_result(&a_id, &m1).unwrap().response.unwrap();
+        let m2 = b
+            .handle_incoming_with_result(&a_id, &m1)
+            .unwrap()
+            .response
+            .unwrap();
         let out23 = a.handle_incoming_with_result(&b_id, &m2).unwrap();
         let m3 = out23.response.unwrap();
         b.handle_incoming_with_result(&a_id, &m3).unwrap();
@@ -1272,7 +1342,7 @@ mod tests {
         // but still receives.
         assert!(b.has_receive_session(&a_id));
         let (pt, gen) = b
-            .decrypt_with_session_generation(&inflight, &a_id, &|_| true, || Ok(()))
+            .decrypt_with_session_generation(&inflight, &a_id, |_| true, || Ok(()))
             .expect("quarantined decrypt");
         assert_eq!(pt, b"in-flight");
         assert_eq!(gen, orig_gen);
@@ -1415,7 +1485,11 @@ mod tests {
         let (mut a, a_clock) = manager(a_key, &a_id.to_string(), 3_000);
         let (mut b, _) = manager(b_key, &b_id.to_string(), 3_000);
         let m1 = a.initiate_handshake(&b_id).unwrap();
-        let m2 = b.handle_incoming_with_result(&a_id, &m1).unwrap().response.unwrap();
+        let m2 = b
+            .handle_incoming_with_result(&a_id, &m1)
+            .unwrap()
+            .response
+            .unwrap();
         let out23 = a.handle_incoming_with_result(&b_id, &m2).unwrap();
         let m3 = out23.response.unwrap();
         b.handle_incoming_with_result(&a_id, &m3).unwrap();

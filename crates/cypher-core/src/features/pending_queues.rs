@@ -44,12 +44,11 @@ impl PendingQueues {
 
     // ---- private messages ---------------------------------------------------
 
-    pub fn append_private_message(
-        &mut self,
-        peer: &PeerId,
-        message: PendingPrivateMessage,
-    ) {
-        self.private_messages.entry(peer.clone()).or_default().push(message);
+    pub fn append_private_message(&mut self, peer: &PeerId, message: PendingPrivateMessage) {
+        self.private_messages
+            .entry(peer.clone())
+            .or_default()
+            .push(message);
     }
 
     /// One-shot drain: returns the whole FIFO and removes the peer's key;
@@ -74,7 +73,10 @@ impl PendingQueues {
     // ---- typed payloads -----------------------------------------------------
 
     pub fn append_typed_payload(&mut self, peer: &PeerId, payload: PendingTypedPayload) {
-        self.typed_payloads.entry(peer.clone()).or_default().push(payload);
+        self.typed_payloads
+            .entry(peer.clone())
+            .or_default()
+            .push(payload);
     }
 
     /// One-shot drain (Swift `takeTypedPayloads`).
@@ -120,8 +122,20 @@ mod tests {
     fn fifo_drain_is_one_shot() {
         let mut q = PendingQueues::new();
         let p = peer(1);
-        q.append_private_message(&p, PendingPrivateMessage { content: "one".into(), message_id: "m1".into() });
-        q.append_private_message(&p, PendingPrivateMessage { content: "two".into(), message_id: "m2".into() });
+        q.append_private_message(
+            &p,
+            PendingPrivateMessage {
+                content: "one".into(),
+                message_id: "m1".into(),
+            },
+        );
+        q.append_private_message(
+            &p,
+            PendingPrivateMessage {
+                content: "two".into(),
+                message_id: "m2".into(),
+            },
+        );
         let drained = q.take_private_messages(&p);
         assert_eq!(drained.len(), 2);
         assert_eq!(drained[0].content, "one");
@@ -134,14 +148,26 @@ mod tests {
     fn prepend_restores_order_across_retries() {
         let mut q = PendingQueues::new();
         let p = peer(1);
-        q.append_private_message(&p, PendingPrivateMessage { content: "newer".into(), message_id: "m3".into() });
+        q.append_private_message(
+            &p,
+            PendingPrivateMessage {
+                content: "newer".into(),
+                message_id: "m3".into(),
+            },
+        );
         // Two sends failed after the newer one was queued; they go back at
         // the front, in their original relative order.
         q.prepend_private_messages(
             &p,
             vec![
-                PendingPrivateMessage { content: "older-1".into(), message_id: "m1".into() },
-                PendingPrivateMessage { content: "older-2".into(), message_id: "m2".into() },
+                PendingPrivateMessage {
+                    content: "older-1".into(),
+                    message_id: "m1".into(),
+                },
+                PendingPrivateMessage {
+                    content: "older-2".into(),
+                    message_id: "m2".into(),
+                },
             ],
         );
         let drained = q.take_private_messages(&p);
@@ -153,8 +179,20 @@ mod tests {
     fn private_messages_and_typed_payloads_drain_independently() {
         let mut q = PendingQueues::new();
         let p = peer(7);
-        q.append_private_message(&p, PendingPrivateMessage { content: "dm".into(), message_id: "m".into() });
-        q.append_typed_payload(&p, PendingTypedPayload { payload: vec![0x20, 1], transfer_id: Some("t1".into()) });
+        q.append_private_message(
+            &p,
+            PendingPrivateMessage {
+                content: "dm".into(),
+                message_id: "m".into(),
+            },
+        );
+        q.append_typed_payload(
+            &p,
+            PendingTypedPayload {
+                payload: vec![0x20, 1],
+                transfer_id: Some("t1".into()),
+            },
+        );
         let typed = q.take_typed_payloads(&p);
         assert_eq!(typed.len(), 1);
         // Private message survives the typed drain.
@@ -167,7 +205,13 @@ mod tests {
     fn typed_payload_cancel_is_idempotent() {
         let mut q = PendingQueues::new();
         let p = peer(2);
-        q.append_typed_payload(&p, PendingTypedPayload { payload: vec![9], transfer_id: Some("transfer-A".into()) });
+        q.append_typed_payload(
+            &p,
+            PendingTypedPayload {
+                payload: vec![9],
+                transfer_id: Some("transfer-A".into()),
+            },
+        );
         assert!(q.contains_typed_payload("transfer-A"));
         assert!(q.remove_typed_payload("transfer-A"));
         assert!(!q.remove_typed_payload("transfer-A")); // second cancel: no-op

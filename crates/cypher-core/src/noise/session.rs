@@ -288,14 +288,7 @@ impl NoiseSession {
         }
         self.handshake_hash = None;
     }
-
-    #[cfg(test)]
-    pub(crate) fn debug_times(&self) -> (u128, u128, u128) {
-        (self.now(), self.session_start_ms, self.last_activity_ms)
-    }
-
 }
-
 
 fn clone_static(secret: &StaticSecret) -> StaticSecret {
     StaticSecret::from(secret.to_bytes())

@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use crate::consts;
+use crate::features::courier::{CourierStore, CourierTier};
 use crate::features::pending_queues::PendingQueues;
 use crate::identity::CypherIdentity;
 use crate::mesh::announce::{self, AnnounceThrottle};
@@ -26,9 +27,15 @@ use crate::noise::session_manager::{ManagerEvent, SessionManager};
 use crate::noise::NoiseError;
 use crate::packet::BitchatPacket;
 use crate::protocol::capabilities::PeerCapabilities;
+use crate::protocol::courier::CourierEnvelope;
 use crate::protocol::private::{MeshPingPayload, PrivateMessagePacket};
 use crate::types::{MessageType, NoisePayloadType};
 use crate::util::now_ms;
+
+/// Injectable deposit-trust policy: (peer, is_favorite, is_verified) ->
+/// tier, or `None` to reject (Swift BLEService.courierDepositPolicy).
+pub type CourierPolicyFn =
+    Box<dyn Fn(&crate::PeerId, bool, bool) -> Option<CourierTier> + Send + Sync>;
 
 /// UI-facing events (the engine's `TransportEvent` surface).
 #[derive(Clone, Debug, serde::Serialize)]
@@ -164,6 +171,11 @@ pub struct MeshEngine {
     pending: PendingQueues,
     /// Gossip sync: broadcast-packet stores + reconciliation scheduling.
     gossip: crate::features::gossip::GossipSyncManager,
+    /// Envelopes we carry for third parties.
+    courier: CourierStore,
+    /// Deposit trust policy (Swift BLEService.courierDepositPolicy is an
+    /// injectable closure; default: favorite from registry, else verified).
+    courier_policy: CourierPolicyFn,
     /// Peers we recently gossiped with (initial-sync cooldown).
     initial_synced: Vec<(crate::PeerId, u64)>,
 
@@ -216,6 +228,16 @@ impl MeshEngine {
             advertising: false,
             pending: PendingQueues::new(),
             gossip: crate::features::gossip::GossipSyncManager::new(),
+            courier: CourierStore::new(),
+            courier_policy: Box::new(|_peer, is_favorite, is_verified| {
+                if is_favorite {
+                    Some(CourierTier::Favorite)
+                } else if is_verified {
+                    Some(CourierTier::Verified)
+                } else {
+                    None
+                }
+            }),
             initial_synced: Vec::new(),
             now_ms,
         }
@@ -728,10 +750,13 @@ impl MeshEngine {
                     }
                 }
             }
-            Some(MessageType::PrekeyBundle) | Some(MessageType::CourierEnvelope) => {
+            Some(MessageType::PrekeyBundle) => {
                 // Relayed transparently; the features layer hooks carry the
                 // semantic handling.
                 self.schedule_relay(packet, link, &message_id, out, now);
+            }
+            Some(MessageType::CourierEnvelope) => {
+                self.handle_courier(packet, link, ingress_peer.as_ref(), &sender, out, now);
             }
             _ => {
                 // Unknown types relay with the 128 KiB cap (already enforced
@@ -1492,6 +1517,109 @@ impl MeshEngine {
                 self.send_packet(packet, out, now);
             }
         }
+    }
+
+    /// Courier ingress: open envelopes addressed to us; admit deposits
+    /// from directly-connected peers (Swift `acceptCourierDeposit`).
+    fn handle_courier(
+        &mut self,
+        packet: BitchatPacket,
+        link: LinkId,
+        ingress_peer: Option<&crate::PeerId>,
+        sender: &crate::PeerId,
+        out: &mut EngineOutput,
+        now: u64,
+    ) {
+        let relay_mid = packet.message_identity();
+        let Some(envelope) = CourierEnvelope::decode(&packet.payload) else {
+            self.schedule_relay(packet, link, &relay_mid, out, now);
+            return;
+        };
+        // Addressed to us? (our rotating day tags, day-1..day+1)
+        let day_tags = self.our_day_tags(now);
+        if day_tags
+            .iter()
+            .any(|t| t.as_slice() == envelope.recipient_tag.as_slice())
+        {
+            // Open the seal addressed to our Noise static key.
+            let opened = if let Some(_prekey_id) = envelope.prekey_id {
+                None // prekey seals open via the features prekey store
+            } else {
+                crate::features::courier::open_courier_payload(
+                    &envelope.ciphertext,
+                    self.identity.noise_static_secret(),
+                )
+                .ok()
+                .and_then(|(payload, _sender_static)| {
+                    // Plaintext = [type byte 0x01][PrivateMessagePacket TLV].
+                    let pm = &payload[1..];
+                    crate::protocol::private::PrivateMessagePacket::decode(pm)
+                })
+            };
+            if let Some(pm) = opened {
+                out.events
+                    .push(EngineEvent::CourierEnvelopeOpened { message: pm });
+            }
+            return;
+        }
+        // Transport-level deposit admission (relayed deposits rejected:
+        // a stranger can't ride a trusted neighbor's quota).
+        let Some(ingress) = ingress_peer else {
+            self.schedule_relay(packet, link, &relay_mid, out, now);
+            return;
+        };
+        if ingress != sender {
+            self.schedule_relay(packet, link, &relay_mid, out, now);
+            return;
+        }
+        // Depositor must be a known peer with a Noise key.
+        let Some(info) = self.registry.get(sender).cloned() else {
+            return;
+        };
+        // The packet's signature must verify against the announced key.
+        if let Some(signature) = &packet.signature {
+            let Some(preimage) = packet.to_binary_data_for_signing() else {
+                return;
+            };
+            if !CypherIdentity::verify(signature, &preimage, &info.signing_public_key) {
+                return;
+            }
+        } else {
+            return;
+        }
+        // Tier decision via the injectable policy.
+        let tier = (self.courier_policy)(sender, info.is_favorite, info.is_verified);
+        let Some(tier) = tier else {
+            return; // neither favorite nor verified
+        };
+        let now_ms = now;
+        self.courier
+            .deposit(envelope, info.noise_public_key.to_vec(), tier, now_ms);
+    }
+
+    /// Our rotating recipient tags for day-1, day, day+1.
+    fn our_day_tags(&self, now_ms: u64) -> Vec<[u8; 16]> {
+        let day = CourierEnvelope::epoch_day(now_ms / 1000);
+        let static_key = self.identity.noise_static_public();
+        [-1i64, 0, 1]
+            .iter()
+            .map(|offset| {
+                CourierEnvelope::recipient_tag(
+                    static_key.as_slice(),
+                    (day as i64 + offset).max(0) as u32,
+                )
+            })
+            .collect()
+    }
+
+    /// Override the deposit trust policy (app-level favorites/verification).
+    pub fn set_courier_policy(&mut self, policy: CourierPolicyFn) {
+        self.courier_policy = policy;
+    }
+
+    /// Access the carried-envelope store (for the handover/spray tick).
+    pub fn courier_store_mut(&mut self) -> &mut CourierStore {
+        &mut self.courier
     }
 
     fn send_announce(&mut self, forced: bool, out: &mut EngineOutput, now: u64) {

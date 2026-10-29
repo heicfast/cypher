@@ -255,6 +255,9 @@ pub const PTT_MAX_CONCURRENT_ASSEMBLIES: usize = 8;
 pub const PTT_MAX_BURST_BYTES: usize = 384 * 1024;
 pub const PTT_FINISHED_REGISTRY_S: u64 = 600;
 pub const PTT_INBOUND_FLOOD_GUARD_BYTES_PER_S: usize = 6000;
+
+/// Root of the managed media tree (voicenotes/images/files).
+pub const FILE_STORE_ROOT: &str = "files";
 pub const PTT_PUBLIC_FRAME_MAX_AGE_S: u64 = 30;
 
 // ---------------------------------------------------------------------------

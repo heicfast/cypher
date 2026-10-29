@@ -77,10 +77,10 @@ impl VoiceBurstPacket {
         }
     }
 
+    /// Swift `encode()` never fails — the 210-byte budget is the outgoing
+    /// packetizer's rule, not a codec constraint. Inbound accounting relies
+    /// on this (receivedBytes += encoded.count).
     pub fn encode(&self) -> Option<Vec<u8>> {
-        if self.payload.len() > MAX_BURST_CONTENT_BYTES {
-            return None;
-        }
         let mut out = Vec::with_capacity(8 + 2 + 1 + self.payload.len());
         out.extend_from_slice(&self.burst_id);
         be::put_u16(&mut out, self.seq);
@@ -97,9 +97,6 @@ impl VoiceBurstPacket {
         let seq = u16::from_be_bytes(data[8..10].try_into().ok()?);
         let flags = data[10];
         let payload = data[11..].to_vec();
-        if payload.len() > MAX_BURST_CONTENT_BYTES {
-            return None;
-        }
         Some(VoiceBurstPacket {
             burst_id,
             seq,
@@ -182,10 +179,15 @@ mod tests {
     }
 
     #[test]
-    fn content_budget_enforced() {
+    fn encode_is_total_like_swift() {
+        // Swift's encode() never fails: the 210-byte budget is the
+        // outgoing packetizer's rule, not a codec constraint. Inbound
+        // flood accounting depends on this (receivedBytes += encoded).
         let id = [2u8; 8];
         let mut pkt = VoiceBurstPacket::data(id, 1, &[vec![0xAA; 100]]).unwrap();
         pkt.payload = vec![0xBB; MAX_BURST_CONTENT_BYTES + 1];
-        assert!(pkt.encode().is_none());
+        let encoded = pkt.encode().expect("encode is total");
+        assert_eq!(encoded.len(), 11 + MAX_BURST_CONTENT_BYTES + 1);
+        assert_eq!(VoiceBurstPacket::decode(&encoded).unwrap(), pkt);
     }
 }

@@ -43,7 +43,7 @@ fn append_length_prefixed(out: &mut Vec<u8>, value: &[u8]) {
 }
 
 /// A signed, persistent bulletin-board notice.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BoardPostPacket {
     pub post_id: Vec<u8>,
     /// Empty string scopes the post to the mesh-local board.
@@ -83,7 +83,7 @@ impl BoardPostPacket {
 }
 
 /// Author-signed deletion marker; retained until the deleted post's expiry.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BoardTombstonePacket {
     pub post_id: Vec<u8>,
     pub deleted_at: u64,
@@ -109,7 +109,7 @@ impl BoardTombstonePacket {
 }
 
 /// Decoded board payload: either a live post or a tombstone.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BoardWire {
     Post(BoardPostPacket),
     Tombstone(BoardTombstonePacket),

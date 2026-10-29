@@ -102,3 +102,19 @@ Development log for the bitchat → Cypher Rust port. Newest entries at the bott
 - Voice PTT inbound jitter buffer, file quota store, and board store persistence are
   v0.2 (wire formats + crypto already ported and tested).
 - Wear OS module not ported (v0.3 candidate).
+
+### Session 1 close-out
+- Gossip sync wired into the engine: broadcast observation, 15/30/60 s sync
+  rounds, 5 s initial-sync passes for fresh direct peers, RSR-flagged diff
+  serving rate-limited 8/30 s per peer.
+- Kotlin app cleanups: coroutines dependency (theme StateFlow), theme init,
+  MainActivity/CypherBridge simplifications.
+- Justfile (check/test/lint/fmt/build-android/apk/clean).
+- **Verified end-to-end locally**: `libcypher.so` cross-compiles for all 4
+  Android ABIs (arm64-v8a, armeabi-v7a, x86_64, x86) with cargo-ndk +
+  NDK 28.2; Gradle 9.6.1 pipeline configured with the cargo-ndk integration
+  (plugin resolution verified; artifact downloads blocked only by sandbox
+  Maven-Central 429 rate limiting — GitHub Actions CI builds cleanly on
+  runner infrastructure).
+- Final state: 181 tests green (174 lib + 3 golden vectors + 4 simulated
+  mesh), clippy clean workspace-wide, rustfmt applied, 10 commits pushed.

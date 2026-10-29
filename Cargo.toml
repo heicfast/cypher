@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/cypher-core", "crates/cypher-android"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+license = "Unlicense"
+repository = "https://github.com/heicfast/cypher"
+description = "Cypher — Bluetooth LE decentralized peer-to-peer mesh messaging (Rust port of the bitchat core)"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release.package."*"]
+opt-level = 3

@@ -1,0 +1,37 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Android
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/wear/build/
+/android/local.properties
+/android/*.iml
+/android/.idea/
+android/.cxx/
+*.apk
+*.aab
+*.so
+!**/src/main/**/*
+
+# JNI build outputs
+jniLibs/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Secrets — NEVER commit tokens/keys
+.env
+*.pem
+*.keystore
+!debug.keystore
+secrets/
+
+# OS
+Thumbs.db

@@ -1,0 +1,16 @@
+[package]
+name = "cypher-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "JNI bindings for the Cypher mesh core (libcypher.so)"
+
+[lib]
+name = "cypher"
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[dependencies]
+cypher-core = { path = "../cypher-core" }
+jni = "0.21"
+log = "0.4"

@@ -117,6 +117,10 @@ impl NoisePayloadType {
             _ => return None,
         })
     }
+
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
 }
 
 #[cfg(test)]

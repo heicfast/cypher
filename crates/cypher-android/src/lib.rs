@@ -17,7 +17,7 @@
 
 use cypher_core::identity::{CypherIdentity, FileIdentityStore, IdentityStore};
 use cypher_core::mesh::engine::{EngineOutput, MeshEngine};
-use cypher_core::mesh::{LinkCommand, LinkDirection, LinkEvent, LinkId, RadioState};
+use cypher_core::mesh::{LinkDirection, LinkEvent, LinkId, RadioState};
 use jni::objects::{JClass, JObject, JString};
 use jni::sys::{jbyte, jbyteArray, jint, jlong, jobjectArray};
 use jni::JNIEnv;
@@ -75,9 +75,7 @@ fn jbytes_to_vec(env: &JNIEnv, arr: jbyteArray) -> Option<Vec<u8>> {
     }
     unsafe {
         let array = jni::objects::JByteArray::from_raw(arr);
-        let converted = env.convert_byte_array(&array).ok();
-        std::mem::forget(array); // the local ref belongs to the caller
-        converted
+        env.convert_byte_array(&array).ok()
     }
 }
 
@@ -145,7 +143,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_engineDestroy(
 /// 4 Discovered{peripheral, rssi}, 5 CentralSubscribed{link}.
 #[no_mangle]
 pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeHandleEvent(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     handle: jlong,
     event_type: jint,
@@ -201,7 +199,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeHandleEvent(
 
 #[no_mangle]
 pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeTick(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     handle: jlong,
 ) -> jbyteArray {
@@ -294,7 +292,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeSendMeshPing(
 
 #[no_mangle]
 pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeAnnounce(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     handle: jlong,
 ) -> jbyteArray {
@@ -311,7 +309,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeAnnounce(
 /// JSON snapshot of the local identity + peer state for the UI.
 #[no_mangle]
 pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeStateJson(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     handle: jlong,
 ) -> jbyteArray {

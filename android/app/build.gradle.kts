@@ -3,7 +3,6 @@ import org.gradle.api.tasks.Exec
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    org.jetbrains.kotlin.android
 }
 
 android {

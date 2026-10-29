@@ -105,7 +105,8 @@ impl PrekeyBundle {
                         return None;
                     }
                     let mut parsed = Vec::new();
-                    for entry in value.chunks_exact(PREKEY_ENTRY_LENGTH) {
+                    let (entries, _) = value.as_chunks::<PREKEY_ENTRY_LENGTH>();
+                    for entry in entries {
                         let id = u32::from_be_bytes(entry[..4].try_into().ok()?);
                         parsed.push(Prekey {
                             id,

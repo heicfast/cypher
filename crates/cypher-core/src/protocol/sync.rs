@@ -2,7 +2,7 @@
 
 use crate::consts;
 use crate::tlv::{write_long, TlvReader};
-use crate::util::{be, sha256};
+use crate::util::sha256;
 
 // ---------------------------------------------------------------------------
 // Sync type flags
@@ -172,7 +172,7 @@ impl GcsFilter {
         if total == 0 {
             return (Vec::new(), 2, 0);
         }
-        let m = (((total as u64) << p.min(32)) as u64).min(u32::MAX as u64) as u32;
+        let m = ((total as u64) << p.min(32)).min(u32::MAX as u64) as u32;
         let fits = |count: usize| -> bool {
             if count == 0 {
                 return true;
@@ -183,7 +183,7 @@ impl GcsFilter {
         // Binary search for the largest fitting count.
         let (mut lo, mut hi) = (0usize, total);
         while lo < hi {
-            let mid = (lo + hi + 1) / 2;
+            let mid = (lo + hi + 1).div_ceil(2);
             if fits(mid) {
                 lo = mid;
             } else {

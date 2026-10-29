@@ -83,20 +83,13 @@ impl AnnouncementPacket {
                 0x01 => nickname = String::from_utf8(value.to_vec()).ok(),
                 0x02 => noise_public_key = Some(value.to_vec()),
                 0x03 => signing_public_key = Some(value.to_vec()),
-                0x04 => {
-                    if !value.is_empty() && value.len().is_multiple_of(8) {
-                        let neighbors: Vec<[u8; 8]> = value
-                            .chunks_exact(8)
-                            .map(|c| c.try_into().unwrap())
-                            .collect();
-                        direct_neighbors = Some(neighbors);
-                    }
+                0x04 if !value.is_empty() && value.len().is_multiple_of(8) => {
+                    let (chunks, _) = value.as_chunks::<8>();
+                    direct_neighbors = Some(chunks.to_vec());
                 }
                 0x05 => capabilities = PeerCapabilities::decode(value),
-                0x06 => {
-                    if value.len() <= 12 {
-                        bridge_geohash = String::from_utf8(value.to_vec()).ok();
-                    }
+                0x06 if value.len() <= 12 => {
+                    bridge_geohash = String::from_utf8(value.to_vec()).ok();
                 }
                 _ => {} // skip unknown
             }

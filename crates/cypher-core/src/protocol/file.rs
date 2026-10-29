@@ -8,7 +8,6 @@
 //! multiple `0x04` TLVs is concatenated.
 
 use crate::consts;
-use crate::tlv::TlvReader;
 use crate::util::be;
 
 pub const MAX_PAYLOAD_BYTES: usize = consts::FILE_MAX_PAYLOAD_BYTES;

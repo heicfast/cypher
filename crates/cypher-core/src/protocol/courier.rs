@@ -9,7 +9,7 @@
 
 use crate::consts;
 use crate::tlv::{write_long, TlvReader};
-use crate::util::{hmac_sha256, now_s};
+use crate::util::hmac_sha256;
 
 pub const TAG_LENGTH: usize = consts::COURIER_TAG_LENGTH;
 pub const MAX_CIPHERTEXT_BYTES: usize = consts::COURIER_MAX_CIPHERTEXT_BYTES;
@@ -283,6 +283,5 @@ mod tests {
         let e = CourierEnvelope::new(tag, 1000, ciphertext, 1, None);
         assert!(e.is_expired(1000));
         assert!(!e.is_expired(999));
-        let _ = now_s();
     }
 }

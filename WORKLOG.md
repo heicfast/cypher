@@ -118,3 +118,68 @@ Development log for the bitchat → Cypher Rust port. Newest entries at the bott
   runner infrastructure).
 - Final state: 181 tests green (174 lib + 3 golden vectors + 4 simulated
   mesh), clippy clean workspace-wide, rustfmt applied, 10 commits pushed.
+
+### Session 2 (2026-10-29/30) — build pipeline green + v0.2 + parity harness
+
+**Build pipeline (the "CI is failing" item):**
+- Root-caused the android CI failure: `platforms;android-37` is not an
+  installable package in this SDK generation — the platform ships as the
+  minor-versioned `platforms;android-37.0` (verified against
+  dl.google.com's repository2-3.xml). Fixed the workflow (and the
+  corrupted `branches: ain]` YAML).
+- Caught that the .so native libraries were NEVER committed (`.gitignore`
+  `jniLibs/` blanket exclusion) — CI would have shipped an APK that
+  crashes on load. Adopted bitchat's production pattern: checked-in
+  release .so for all 4 ABIs + `tools/native-SHA256SUMS` +
+  `verify-native-checksums.sh` gate in CI.
+- First real Gradle build of the Kotlin app (yesterday's session never
+  compiled it — Maven 429s + a JRE-only Java install masked it). Fixed
+  34 Kotlin errors across CypherBridge/BleLinkLayer/ChatScreen (API-37
+  callback names, wrong imports, dead statements); AGP-9 DSL churn fixed
+  by dropping Gradle-driven cargo for prebuilt libs; heap sized for the
+  4 GiB box (in-process Kotlin compiler).
+- **CI green end-to-end**: rust ✓ android ✓ with a 21 MB debug-APK
+  artifact on every push.
+- Fixed a nondeterministic security gate: `strings | grep -q` under
+  `set -o pipefail` is racy (grep -q exits early → strings dies of
+  SIGPIPE 141 → pipefail flips the verdict). The gate silently passed
+  dirty binaries. Process substitution now makes the check deterministic.
+- `.cargo/config.toml` remaps the workspace root AND cargo home out of
+  the shipped binaries (dependency panic locations were the last 20
+  host paths).
+
+**v0.2 features (all of the session-1 delta list):**
+- `noise/session_manager.rs` — the full 1289-line NoiseSessionManager
+  port: quarantine of established sessions on unauthenticated initiation
+  (receive-only), bounded rollback restores under a 60 s cooldown, four
+  ingress gates in load-bearing order, lexicographic crossed-initiation
+  tiebreak, generation leases with fail-closed pinned crypto, one-shot
+  initiation claims, manager-owned recovery with rate-limit redispatch,
+  rekey thresholds (9e8 msgs / 86 400 s idle / 77 760 s age).
+- `features/pending_queues.rs` — BLENoiseSessionQueues exact semantics.
+- Engine integration: raw session map replaced by the manager; tick
+  processes manager deadlines; rekey poll in maintenance; new events
+  SessionRestored/SessionFailed.
+- `features/voice_ptt.rs` (assembly, gap-skip, flood guard, ADTS framer),
+  `features/file_quota.rs` (100 MiB quota, voice_live_ exemption),
+  `features/board_store.rs` (caps, tombstones, retain capping),
+  `features/private_media.rs` (8-rule admission tree), engine courier
+  admission (relays rejected, signature + tier policy).
+
+**Side-by-side parity (the "compare side by side" item):**
+- `tests/swift_parity_vectors.rs` — 14 cross-language golden vectors
+  mined from the Swift test suite (each independently re-derived). The
+  harness caught three REAL divergences, all fixed:
+  1. voice decode accepted unknown flags bytes,
+  2. voice decode accepted per-kind-invalid payloads (zero-frame DATA,
+     non-AAC-LC START, short END),
+  3. GCS accepted p outside 1..=32 and m ∈ {0,1,u32::MAX}.
+- `identity/rotation.rs` — PeerIDRotation port with its 3 goldens.
+- `mesh_message_identity` ported with its golden.
+- `docs/PARITY.md` — the full 41-row module-by-module comparison
+  (GOLDEN / VECTOR / CONSTRUCTION / STRUCTURAL / DELTA tiers).
+
+**Final state:** 234 tests green (213 lib + 3 golden Noise + 4 simulated
+mesh + 14 parity), clippy clean workspace-wide, rustfmt applied,
+17 commits, all pushed. Token verified absent from every commit
+(`git log -p | grep -c ghp_` → 0).

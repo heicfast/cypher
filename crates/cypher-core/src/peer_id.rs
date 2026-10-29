@@ -106,6 +106,25 @@ impl PeerId {
         bare.len() == 64 && bare.bytes().all(|b| b.is_ascii_hexdigit())
     }
 
+    /// Decode the bare 64-hex Noise public key, if this ID is one
+    /// (Swift PeerID.noiseKey).
+    pub fn noise_key(&self) -> Option<[u8; 32]> {
+        let bare = self.bare();
+        if bare.len() == 64 && bare.bytes().all(|b| b.is_ascii_hexdigit()) {
+            crate::util::hex_decode(bare).and_then(|v| {
+                let mut out = [0u8; 32];
+                if v.len() == 32 {
+                    out.copy_from_slice(&v);
+                    Some(out)
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        }
+    }
+
     /// True when this is the short on-air form (bare 16 hex chars).
     pub fn is_short(&self) -> bool {
         let bare = self.bare();

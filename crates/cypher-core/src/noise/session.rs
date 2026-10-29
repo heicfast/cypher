@@ -38,7 +38,7 @@ pub struct NoiseSession {
     session_start_ms: u128,
     last_activity_ms: u128,
     /// Monotonic wall clock (ms); injected for deterministic tests.
-    now_ms: Box<dyn Fn() -> u64 + Send + Sync>,
+    now_ms: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 impl NoiseSession {
@@ -47,7 +47,7 @@ impl NoiseSession {
             peer_id,
             role,
             local_static_key,
-            Box::new(crate::util::now_ms),
+            std::sync::Arc::new(crate::util::now_ms),
         )
     }
 
@@ -55,7 +55,7 @@ impl NoiseSession {
         peer_id: crate::PeerId,
         role: NoiseRole,
         local_static_key: StaticSecret,
-        now_ms: Box<dyn Fn() -> u64 + Send + Sync>,
+        now_ms: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
     ) -> Self {
         let now = now_ms() as u128;
         NoiseSession {
@@ -232,6 +232,10 @@ impl NoiseSession {
         self.state == NoiseSessionState::Established
     }
 
+    pub fn is_handshaking(&self) -> bool {
+        self.state == NoiseSessionState::Handshaking
+    }
+
     pub fn get_remote_static_public_key(&self) -> Option<[u8; 32]> {
         self.remote_static_public_key
     }
@@ -284,7 +288,14 @@ impl NoiseSession {
         }
         self.handshake_hash = None;
     }
+
+    #[cfg(test)]
+    pub(crate) fn debug_times(&self) -> (u128, u128, u128) {
+        (self.now(), self.session_start_ms, self.last_activity_ms)
+    }
+
 }
+
 
 fn clone_static(secret: &StaticSecret) -> StaticSecret {
     StaticSecret::from(secret.to_bytes())

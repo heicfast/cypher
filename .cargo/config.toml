@@ -1,0 +1,14 @@
+# Build hygiene: keep host-specific paths out of the shipped native
+# libraries (verified by tools/verify-native-checksums.sh, mirroring
+# bitchat's container-based reproducible builds).
+#
+# `--remap-path-prefix` rewrites the compiler-embedded source paths in
+# panic messages (`file!()`), backtraces, and debug info, so binaries
+# built on any machine (local sandbox: /home/z/my-project/cypher,
+# GitHub runners: /home/runner/work/cypher/cypher) come out clean.
+[target.'cfg(all())']
+rustflags = [
+    "--remap-path-prefix=/home/z/my-project/cypher=/cypher",
+    "--remap-path-prefix=/home/runner/work/cypher/cypher=/cypher",
+    "--remap-path-prefix=/home/z/cypher=/cypher",
+]

@@ -20,6 +20,7 @@ pub mod cipher;
 pub mod handshake;
 pub mod rate_limiter;
 pub mod session;
+pub mod session_manager;
 pub mod symmetric;
 
 pub use cipher::CipherState;
@@ -48,6 +49,13 @@ pub enum NoiseError {
     SessionNotFound,
     AlreadyEstablished,
     PeerIdentityMismatch,
+    // Manager-level
+    /// The generation is established but its transport state is not yet
+    /// installed by the caller (Swift: transportGenerationNotReady).
+    TransportGenerationNotReady,
+    /// The manager owns recovery for this failure; the caller must not
+    /// spin its own retries (Swift: NoiseManagedHandshakeFailure).
+    ManagedHandshakeFailure(Box<NoiseError>),
     // NoiseSecurityError
     MessageTooLarge,
     SessionExpired,

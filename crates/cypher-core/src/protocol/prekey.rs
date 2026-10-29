@@ -4,6 +4,8 @@
 //! `0x02 prekeys ([u32 BE id ‖ 32 B key] × n, 1..=8, no duplicate IDs)`,
 //! `0x03 generatedAt(u64 BE ms)`, `0x04 signature(64)`.
 
+use serde::{Deserialize, Serialize};
+
 use crate::consts;
 use crate::tlv::{write_long, TlvReader};
 use crate::util::be;
@@ -14,14 +16,14 @@ pub const MAX_PREKEYS: usize = consts::PREKEY_BATCH_SIZE;
 const PREKEY_ENTRY_LENGTH: usize = 4 + KEY_LENGTH;
 const SIGNING_CONTEXT: &[u8] = b"bitchat-prekey-bundle-v1";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prekey {
     pub id: u32,
     /// X25519 public key (32 bytes).
     pub public_key: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrekeyBundle {
     /// Owner's Noise static public key (32 bytes).
     pub noise_static_public_key: Vec<u8>,

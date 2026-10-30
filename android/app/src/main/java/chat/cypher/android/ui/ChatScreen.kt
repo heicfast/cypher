@@ -157,6 +157,7 @@ fun ChatScreen() {
                 }
             }
         }
+        }
         refreshState()
         onDispose { unsubscribe() }
     }

@@ -8,93 +8,126 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import chat.cypher.android.R
 
-/** Inter — the Cypher design typeface (4 bundled weights). */
-val CypherFontFamily = FontFamily(
-    Font(R.font.inter_regular, FontWeight.Normal),
-    Font(R.font.inter_medium, FontWeight.Medium),
-    Font(R.font.inter_semibold, FontWeight.SemiBold),
-    Font(R.font.inter_bold, FontWeight.Bold),
+/**
+ * Custom bundled Google Fonts installed via font-util:
+ * - Space Grotesk: Sharp, technical display & section headers
+ * - Plus Jakarta Sans: High-x-height, ultra-legible conversational UI & message copy
+ * - JetBrains Mono: Cryptographic fingerprints, peer IDs, RSSI telemetry, and slash commands
+ */
+val CypherDisplayFontFamily = FontFamily(
+    Font(R.font.space_grotesk, FontWeight.Normal),
+    Font(R.font.space_grotesk, FontWeight.Medium),
+    Font(R.font.space_grotesk, FontWeight.SemiBold),
+    Font(R.font.space_grotesk, FontWeight.Bold),
+)
+
+val CypherSansFontFamily = FontFamily(
+    Font(R.font.plus_jakarta_sans, FontWeight.Normal),
+    Font(R.font.plus_jakarta_sans, FontWeight.Medium),
+    Font(R.font.plus_jakarta_sans, FontWeight.SemiBold),
+    Font(R.font.plus_jakarta_sans, FontWeight.Bold),
+)
+
+val CypherMonoFontFamily = FontFamily(
+    Font(R.font.jetbrains_mono, FontWeight.Normal),
+    Font(R.font.jetbrains_mono, FontWeight.Medium),
+    Font(R.font.jetbrains_mono, FontWeight.SemiBold),
+    Font(R.font.jetbrains_mono, FontWeight.Bold),
 )
 
 val CypherTypography = Typography(
-    // Large screen titles ("Chats", "Contacts")
-    displaySmall = TextStyle(
-        fontFamily = CypherFontFamily,
+    displayLarge = TextStyle(
+        fontFamily = CypherDisplayFontFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 30.sp,
-        lineHeight = 36.sp,
+        fontSize = 34.sp,
+        lineHeight = 40.sp,
+        letterSpacing = (-0.8).sp,
+    ),
+    displayMedium = TextStyle(
+        fontFamily = CypherDisplayFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 28.sp,
+        lineHeight = 34.sp,
         letterSpacing = (-0.5).sp,
     ),
-    // Conversation header name
-    headlineMedium = TextStyle(
-        fontFamily = CypherFontFamily,
+    headlineLarge = TextStyle(
+        fontFamily = CypherDisplayFontFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 17.sp,
-        lineHeight = 22.sp,
-        letterSpacing = (-0.2).sp,
+        fontSize = 24.sp,
+        lineHeight = 30.sp,
+        letterSpacing = (-0.4).sp,
+    ),
+    headlineMedium = TextStyle(
+        fontFamily = CypherDisplayFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 20.sp,
+        lineHeight = 26.sp,
+        letterSpacing = (-0.3).sp,
     ),
     headlineSmall = TextStyle(
-        fontFamily = CypherFontFamily,
+        fontFamily = CypherDisplayFontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
-        lineHeight = 21.sp,
+        fontSize = 18.sp,
+        lineHeight = 24.sp,
         letterSpacing = (-0.2).sp,
     ),
-    // Row primary text (names)
+    titleLarge = TextStyle(
+        fontFamily = CypherDisplayFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 18.sp,
+        lineHeight = 24.sp,
+        letterSpacing = (-0.2).sp,
+    ),
     titleMedium = TextStyle(
-        fontFamily = CypherFontFamily,
+        fontFamily = CypherSansFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
-        lineHeight = 21.sp,
+        lineHeight = 22.sp,
         letterSpacing = (-0.1).sp,
     ),
     titleSmall = TextStyle(
-        fontFamily = CypherFontFamily,
+        fontFamily = CypherSansFontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 14.sp,
-        lineHeight = 18.sp,
-    ),
-    // Message body
-    bodyLarge = TextStyle(
-        fontFamily = CypherFontFamily,
-        fontWeight = FontWeight.Normal,
-        fontSize = 15.sp,
-        lineHeight = 21.sp,
-        letterSpacing = 0.sp,
-    ),
-    // Previews / secondary body
-    bodyMedium = TextStyle(
-        fontFamily = CypherFontFamily,
-        fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
         lineHeight = 19.sp,
-        letterSpacing = 0.sp,
+    ),
+    bodyLarge = TextStyle(
+        fontFamily = CypherSansFontFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 15.5.sp,
+        lineHeight = 22.sp,
+    ),
+    bodyMedium = TextStyle(
+        fontFamily = CypherSansFontFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
     ),
     bodySmall = TextStyle(
-        fontFamily = CypherFontFamily,
+        fontFamily = CypherSansFontFamily,
         fontWeight = FontWeight.Normal,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
+        fontSize = 12.5.sp,
+        lineHeight = 17.sp,
     ),
-    // Timestamps / metadata
-    labelMedium = TextStyle(
-        fontFamily = CypherFontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = 11.sp,
-        lineHeight = 14.sp,
+    labelLarge = TextStyle(
+        fontFamily = CypherSansFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 13.5.sp,
+        lineHeight = 18.sp,
         letterSpacing = 0.1.sp,
     ),
-    labelSmall = TextStyle(
-        fontFamily = CypherFontFamily,
+    labelMedium = TextStyle(
+        fontFamily = CypherMonoFontFamily,
         fontWeight = FontWeight.Medium,
-        fontSize = 10.sp,
-        lineHeight = 13.sp,
+        fontSize = 11.5.sp,
+        lineHeight = 15.sp,
+        letterSpacing = 0.2.sp,
     ),
-    // Buttons
-    labelLarge = TextStyle(
-        fontFamily = CypherFontFamily,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 15.sp,
-        lineHeight = 20.sp,
+    labelSmall = TextStyle(
+        fontFamily = CypherMonoFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 10.5.sp,
+        lineHeight = 14.sp,
+        letterSpacing = 0.3.sp,
     ),
 )

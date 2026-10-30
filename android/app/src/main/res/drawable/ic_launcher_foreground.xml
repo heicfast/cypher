@@ -1,15 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:viewportWidth="135.4667"
-    android:viewportHeight="135.4667"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
-    android:height="108dp">
-    <group
-        android:scaleX="0.2645833"
-        android:scaleY="0.2645833"
-        android:translateX="-1.0877"
-        android:translateY="47.11238">
-        <path
-            android:pathData="M187.45493 73.477844q9.17966 2.148433 14.38798 8.333313 5.20832 6.18488 5.20832 14.713504 0 12.499969 -9.11456 19.921819 -9.04945 7.42186 -21.80984 7.42186h-26.1067V32.006596h25.45566q13.28122 0 20.76818 5.85936 7.48696 5.794256 7.48696 16.406208 0 6.5104 -4.36197 11.588512 -4.29686 5.078112 -11.91403 7.356752zM160.69718 68.52994h12.49997q19.59631 0 19.59631 -13.99736 0 -6.380192 -4.8177 -9.7656 -4.8177 -3.450512 -14.12757 -3.450512h-13.15101zm0 46.02853h12.10935q10.61195 0 16.79683 -4.8177 6.24998 -4.81769 6.24998 -13.216109 0 -8.919248 -6.11977 -13.802048 -6.11978 -4.8828 -17.70829 -4.8828h-11.3281zm116.14554 9.30987h-41.73166v-9.30987h15.82027V41.316468h-15.82027v-9.309872h41.73166v9.309872h-15.23433v73.242002h15.23433zM370.20186 40.665428H341.88162V123.86834H331.26967V40.665428h-28.45045v-8.658832h67.38264z"
-            android:fillColor="#FFFFFF" />
-    </group>
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer cryptographic hexagon shield -->
+    <path
+        android:pathData="M54,24 L79.98,39 L79.98,69 L54,84 L28.02,69 L28.02,39 Z"
+        android:strokeWidth="2.8"
+        android:fillColor="#1138BDF8">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="28"
+                android:startY="24"
+                android:endX="80"
+                android:endY="84"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#38BDF8" />
+                <item android:offset="0.5" android:color="#22D3EE" />
+                <item android:offset="1.0" android:color="#10B981" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Inner C-shaped cipher node links -->
+    <path
+        android:pathData="M65,43.5 L54,37 L41,44.5 L41,63.5 L54,71 L65,64.5"
+        android:strokeWidth="4.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"
+        android:strokeColor="#F8FAFC" />
+
+    <!-- Mesh spokes -->
+    <path
+        android:pathData="M54,24 L54,37 M28.02,39 L41,44.5 M28.02,69 L41,63.5 M54,84 L54,71"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeColor="#6638BDF8" />
+
+    <!-- Central encrypted core pulse node -->
+    <path
+        android:pathData="M54,54m-5.5,0a5.5,5.5 0,1 1,11 0a5.5,5.5 0,1 1,-11 0"
+        android:fillColor="#10B981" />
+    <path
+        android:pathData="M54,54m-2.4,0a2.4,2.4 0,1 1,4.8 0a2.4,2.4 0,1 1,-4.8 0"
+        android:fillColor="#ECFDF5" />
+
+    <!-- Vertex mesh nodes -->
+    <path android:pathData="M54,24m-2.8,0a2.8,2.8 0,1 1,5.6 0a2.8,2.8 0,1 1,-5.6 0" android:fillColor="#38BDF8" />
+    <path android:pathData="M79.98,39m-2.8,0a2.8,2.8 0,1 1,5.6 0a2.8,2.8 0,1 1,-5.6 0" android:fillColor="#22D3EE" />
+    <path android:pathData="M79.98,69m-2.8,0a2.8,2.8 0,1 1,5.6 0a2.8,2.8 0,1 1,-5.6 0" android:fillColor="#10B981" />
+    <path android:pathData="M54,84m-2.8,0a2.8,2.8 0,1 1,5.6 0a2.8,2.8 0,1 1,-5.6 0" android:fillColor="#10B981" />
+    <path android:pathData="M28.02,69m-2.8,0a2.8,2.8 0,1 1,5.6 0a2.8,2.8 0,1 1,-5.6 0" android:fillColor="#22D3EE" />
+    <path android:pathData="M28.02,39m-2.8,0a2.8,2.8 0,1 1,5.6 0a2.8,2.8 0,1 1,-5.6 0" android:fillColor="#38BDF8" />
 </vector>

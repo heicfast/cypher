@@ -1,18 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Cypher</string>
-
-    <!-- Mesh foreground service -->
-    <string name="mesh_channel_name">Mesh service</string>
-    <string name="mesh_channel_description">Keeps the Bluetooth mesh connected</string>
-    <string name="mesh_notification_title">Cypher mesh active</string>
-    <string name="mesh_notification_text">Scanning for peers and relaying encrypted messages</string>
-    <string name="mesh_notification_peers">%1$d peers nearby</string>
-
-    <!-- Direct message notifications -->
-    <string name="dm_channel_name">Messages</string>
-    <string name="dm_channel_description">Private message alerts</string>
-    <string name="dm_notification_sent_image">📷 sent an image</string>
-    <string name="dm_notification_sent_voice">🎤 sent a voice message</string>
-    <string name="dm_notification_sent_file">📎 sent a file</string>
+    <string name="mesh_service_title">Cypher Mesh Active</string>
+    <string name="mesh_service_text">Encrypted Bluetooth LE mesh relay is running</string>
+    <string name="mesh_channel_name">Cypher Mesh Relay</string>
+    <string name="mesh_channel_desc">Persistent status for the background Bluetooth LE mesh link layer</string>
+    <string name="dm_channel_name">Encrypted Direct Messages</string>
+    <string name="dm_channel_desc">Alerts for incoming Noise XX encrypted private messages and mentions</string>
 </resources>

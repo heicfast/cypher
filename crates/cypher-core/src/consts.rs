@@ -181,7 +181,7 @@ pub const SYNC_STORE_FILES_BYTES: usize = 32 * 1024 * 1024;
 pub const SYNC_STORE_GROUP_MESSAGES: usize = 200;
 pub const SYNC_STORE_GROUP_MESSAGES_BYTES: usize = 4 * 1024 * 1024;
 pub const SYNC_STORE_PREKEYS: usize = 200;
-pub const SYNC_INITIAL_SYNC_DELAY_S: u64 = 5;
+pub const SYNC_INITIAL_SYNC_DELAY_S: u64 = 1;
 pub const REQUEST_SYNC_MAX_FRAGMENT_FILTER: usize = 60;
 pub const REQUEST_SYNC_MAX_ENCODED_BYTES: usize = 1024;
 

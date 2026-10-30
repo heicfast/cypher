@@ -303,7 +303,9 @@ impl GossipSyncManager {
     /// Record a broadcast packet in the appropriate store (gossip candidates).
     pub fn observe(&mut self, packet: &crate::packet::BitchatPacket) {
         let class = match MessageType::from_u8(packet.packet_type) {
-            Some(MessageType::Message) => StoreClass::Messages,
+            // Announces sync inside the publicMessages class (parity: Swift
+            // `.publicMessages = [.announce, .message]`).
+            Some(MessageType::Announce) | Some(MessageType::Message) => StoreClass::Messages,
             Some(MessageType::GroupMessage) => StoreClass::GroupMessages,
             Some(MessageType::Fragment) => StoreClass::Fragments,
             Some(MessageType::FileTransfer) => StoreClass::Files,

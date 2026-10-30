@@ -471,3 +471,256 @@ fn discovery_filters_non_connectable_and_weak() {
         "weak-RSSI peripheral ignored"
     );
 }
+
+// ---------------------------------------------------------------------------
+// v0.3 feature surface: receipts, ACKs, files, voice, nickname, blocking
+// ---------------------------------------------------------------------------
+
+fn is_read_receipt(e: &EngineEvent) -> bool {
+    matches!(
+        e,
+        EngineEvent::NoisePayloadReceived {
+            payload_type: 0x02,
+            ..
+        }
+    )
+}
+
+fn is_delivery_ack(e: &EngineEvent) -> bool {
+    matches!(
+        e,
+        EngineEvent::NoisePayloadReceived {
+            payload_type: 0x03,
+            ..
+        }
+    )
+}
+
+fn is_file_received(e: &EngineEvent) -> bool {
+    matches!(e, EngineEvent::FileTransferReceived { .. })
+}
+
+fn is_voice_frame(e: &EngineEvent) -> bool {
+    matches!(e, EngineEvent::PublicVoiceFrameReceived { .. })
+}
+
+#[test]
+fn read_receipt_and_delivery_ack_round_trip() {
+    let mut world = World::new(6_000_000);
+    world.bring_up();
+    world.settle(4);
+
+    let bob_id = world.bob.engine.local_peer_id();
+    let out = world
+        .alice
+        .engine
+        .send_private_message(&bob_id, "ping", "dm-r1");
+    world.alice_sends(out);
+    world.settle(8);
+
+    assert!(count(&world.bob, is_noise_payload) >= 1);
+
+    // Bob acks delivery and then marks the message read.
+    let out = world
+        .bob
+        .engine
+        .send_delivery_ack(&world.alice.engine.local_peer_id(), "dm-r1");
+    world.bob_sends(out);
+    let out = world
+        .bob
+        .engine
+        .send_read_receipt(&world.alice.engine.local_peer_id(), "dm-r1");
+    world.bob_sends(out);
+
+    assert!(
+        count(&world.alice, is_delivery_ack) >= 1,
+        "alice should receive the delivery ACK; events: {:?}",
+        world.alice.events
+    );
+    assert!(
+        count(&world.alice, is_read_receipt) >= 1,
+        "alice should receive the read receipt"
+    );
+
+    // The receipt body carries the original message id.
+    let receipt = world.alice.events.iter().find_map(|e| match e {
+        EngineEvent::NoisePayloadReceived {
+            payload_type: 0x02,
+            payload,
+            ..
+        } => Some(payload.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        receipt,
+        Some(b"dm-r1".to_vec()),
+        "receipt payload = originalMessageID.utf8"
+    );
+}
+
+#[test]
+fn private_file_transfer_delivers_file_event() {
+    let mut world = World::new(7_000_000);
+    world.bring_up();
+    world.settle(4);
+
+    let bob_id = world.bob.engine.local_peer_id();
+    // Establish the session first with a DM (the private-media gate
+    // requires a secure session).
+    let out = world
+        .alice
+        .engine
+        .send_private_message(&bob_id, "hello", "dm-f1");
+    world.alice_sends(out);
+    world.settle(8);
+
+    let png: Vec<u8> = vec![0x89, b'P', b'N', b'G', 1, 2, 3, 4];
+    let out = world.alice.engine.send_file_private(
+        &bob_id,
+        "photo.png",
+        "image/png",
+        &png,
+        "transfer-f1",
+    );
+    world.alice_sends(out);
+    world.settle(8);
+
+    let files: Vec<_> = world
+        .bob
+        .events
+        .iter()
+        .filter(|e| is_file_received(e))
+        .collect();
+    assert_eq!(files.len(), 1, "bob should receive exactly one file event");
+    match files[0] {
+        EngineEvent::FileTransferReceived { sender, file } => {
+            assert_eq!(*sender, world.alice.engine.local_peer_id());
+            assert_eq!(file.file_name, "photo.png");
+            assert_eq!(file.mime_type, "image/png");
+            assert_eq!(file.content, png);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn public_voice_burst_broadcasts_and_relays() {
+    let mut world = World::new(8_000_000);
+    world.bring_up();
+    world.settle(4);
+
+    let burst = cypher_core::protocol::voice::VoiceBurstPacket::start([9u8; 8], 0x01);
+    let out = world.alice.engine.send_voice_burst(burst, None);
+    world.alice_sends(out);
+    world.settle(4);
+
+    assert!(
+        count(&world.bob, is_voice_frame) >= 1,
+        "bob should receive the public voice burst; events: {:?}",
+        world.bob.events
+    );
+}
+
+#[test]
+fn blocked_peer_cannot_receive_private_media() {
+    let mut world = World::new(9_000_000);
+    world.bring_up();
+    world.settle(4);
+
+    let bob_id = world.bob.engine.local_peer_id();
+    let out = world
+        .alice
+        .engine
+        .send_private_message(&bob_id, "hello", "dm-b1");
+    world.alice_sends(out);
+    world.settle(8);
+
+    // Bob blocks Alice; her private file send must fail immediately.
+    world
+        .bob
+        .engine
+        .block_peer(&world.alice.engine.local_peer_id());
+    let out = world.bob.engine.send_file_private(
+        &world.alice.engine.local_peer_id(),
+        "x.bin",
+        "application/octet-stream",
+        &[1, 2, 3],
+        "t-b1",
+    );
+    let failed = out.events.iter().any(|e| {
+        matches!(
+            e,
+            EngineEvent::MessageDeliveryStatusUpdated { failed: true, .. }
+        )
+    });
+    assert!(failed, "send to a blocked peer must fail");
+    assert!(world
+        .bob
+        .engine
+        .is_blocked(&world.alice.engine.local_peer_id()));
+
+    // Unblock restores the path.
+    world
+        .bob
+        .engine
+        .unblock_peer(&world.alice.engine.local_peer_id());
+    assert!(!world
+        .bob
+        .engine
+        .is_blocked(&world.alice.engine.local_peer_id()));
+}
+
+#[test]
+fn nickname_change_forces_announce() {
+    let mut world = World::new(10_000_000);
+    world.bring_up();
+    world.settle(4);
+
+    let out = world.alice.engine.set_nickname("alice2".to_string());
+    assert!(
+        !out.commands.is_empty(),
+        "set_nickname must broadcast an announce immediately"
+    );
+    world.alice_sends(out);
+    world.settle(4);
+
+    // Bob's registry reflects the new nickname.
+    let alice_id = world.alice.engine.local_peer_id();
+    let nickname = world
+        .bob
+        .engine
+        .peer_info(&alice_id)
+        .map(|p| p.nickname.clone());
+    assert_eq!(nickname.as_deref(), Some("alice2"));
+}
+
+#[test]
+fn stop_services_broadcasts_leave() {
+    let clock = Clock::new(11_000_000);
+    let identity = CypherIdentity::generate();
+    let mut engine = MeshEngine::with_clock(identity, "alice".to_string(), clock.boxed());
+    engine.handle(LinkEvent::RadioStateChanged(RadioState::PoweredOn));
+
+    let mut out = EngineOutput::default();
+    engine.stop_services(&mut out);
+    assert!(
+        out.commands
+            .iter()
+            .any(|c| matches!(c, LinkCommand::StopScan | LinkCommand::StopAdvertising)),
+        "stop_services stops the radios"
+    );
+    // The leave packet is written to any live link; with no links the
+    // send is a no-op, so at minimum the leave must not panic and the
+    // radios must stop. With a live link the write is observable:
+    let mut world = World::new(12_000_000);
+    world.bring_up();
+    world.settle(4);
+    let mut out = EngineOutput::default();
+    world.alice.engine.stop_services(&mut out);
+    let writes = out
+        .commands
+        .iter()
+        .filter(|c| matches!(c, LinkCommand::Write { .. }))
+        .count();
+    assert!(writes >= 1, "a live link receives the LEAVE write");
+}

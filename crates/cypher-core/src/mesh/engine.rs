@@ -56,9 +56,13 @@ pub enum EngineEvent {
         payload_type: u8,
         payload: Vec<u8>,
     },
-    /// A group message envelope (opaque broadcast) arrived.
+    /// A group message envelope (opaque broadcast) arrived. The payload is
+    /// the raw packet bytes — the UI decrypts with its group keys (parity:
+    /// bitchat hands the opaque envelope to the coordinator).
     GroupMessageReceived {
+        sender: crate::PeerId,
         timestamp_ms: u64,
+        payload: Vec<u8>,
     },
     /// Courier envelope accepted for carriage or opened (addressed to us).
     CourierEnvelopeOpened {
@@ -184,6 +188,12 @@ pub struct MeshEngine {
     courier_policy: CourierPolicyFn,
     /// Peers we recently gossiped with (initial-sync cooldown).
     initial_synced: Vec<(crate::PeerId, u64)>,
+    /// Locally blocked peers (courier deposits + private media are refused;
+    /// message display filtering is the UI's job, mirroring bitchat).
+    blocked: std::collections::HashSet<String>,
+    /// Last time any packet arrived (feeds the announce cadence's
+    /// `recentTraffic` input — bitchat: any packet within 5 s).
+    last_packet_ms: Option<u64>,
 
     /// Injected clock (tests use a manual one).
     now_ms: crate::noise::session_manager::Clock,
@@ -246,6 +256,8 @@ impl MeshEngine {
                 }
             }),
             initial_synced: Vec::new(),
+            blocked: std::collections::HashSet::new(),
+            last_packet_ms: None,
             now_ms,
         }
     }
@@ -260,10 +272,50 @@ impl MeshEngine {
         &self.nickname
     }
 
-    pub fn set_nickname(&mut self, nickname: String) {
+    /// Set the nickname and force-broadcast an announce (parity: bitchat's
+    /// `setNickname` sends an announce immediately so peers see the change).
+    pub fn set_nickname(&mut self, nickname: String) -> EngineOutput {
         self.nickname = nickname;
-        // Nickname changes force an announce on the next opportunity.
         self.announce_throttle.reset();
+        let mut out = EngineOutput::default();
+        let now = (self.now_ms)();
+        self.send_announce(true, &mut out, now);
+        out.next_wake_ms = self.next_wake(now);
+        out
+    }
+
+    /// Mark a peer favorite (drives courier tiers + UI).
+    pub fn set_peer_favorite(&mut self, peer: &crate::PeerId, favorite: bool) {
+        if let Some(info) = self.registry.get_mut(peer) {
+            info.is_favorite = favorite;
+        }
+    }
+
+    /// Mark a peer verified (TOFU confirmation beyond the announce).
+    pub fn set_peer_verified(&mut self, peer: &crate::PeerId, verified: bool) {
+        if let Some(info) = self.registry.get_mut(peer) {
+            info.is_verified = verified;
+        }
+    }
+
+    /// Block a peer (courier deposits + private media refused).
+    pub fn block_peer(&mut self, peer: &crate::PeerId) {
+        self.blocked.insert(peer.as_str().to_string());
+    }
+
+    pub fn unblock_peer(&mut self, peer: &crate::PeerId) {
+        self.blocked.remove(peer.as_str());
+    }
+
+    pub fn is_blocked(&self, peer: &crate::PeerId) -> bool {
+        self.blocked.contains(peer.as_str())
+    }
+
+    pub fn blocked_peers(&self) -> Vec<crate::PeerId> {
+        self.blocked
+            .iter()
+            .map(|s| crate::PeerId::new(s.clone()))
+            .collect()
     }
 
     pub fn connected_peers(&self) -> Vec<crate::PeerId> {
@@ -524,6 +576,216 @@ impl MeshEngine {
         out
     }
 
+    /// Send an arbitrary typed Noise payload (`0x01` private-message
+    /// subtypes: receipts, ACKs, group payloads, voice, files, peer state).
+    /// Queues until a session exists, then encrypts and sends — parity with
+    /// Swift `sendNoisePayload` + `BLENoiseSessionQueues`.
+    pub fn send_typed_noise_payload(
+        &mut self,
+        peer: &crate::PeerId,
+        payload_type: u8,
+        body: &[u8],
+    ) -> EngineOutput {
+        let mut out = EngineOutput::default();
+        let now = (self.now_ms)();
+        let mut payload = Vec::with_capacity(1 + body.len());
+        payload.push(payload_type);
+        payload.extend_from_slice(body);
+
+        if !self.has_established_session(peer) {
+            self.pending.append_typed_payload(
+                peer,
+                crate::features::pending_queues::PendingTypedPayload {
+                    payload: payload.clone(),
+                    transfer_id: None,
+                },
+            );
+            self.initiate_handshake(peer, &mut out, now);
+            out.next_wake_ms = self.next_wake(now);
+            return out;
+        }
+
+        match self.session_manager.encrypt(&payload, peer) {
+            Ok(ciphertext) => {
+                let packet = BitchatPacket::new(
+                    MessageType::NoiseEncrypted.as_u8(),
+                    self.local_peer_id().routing_bytes(),
+                    Some(peer.routing_bytes()),
+                    now,
+                    ciphertext,
+                    consts::MESSAGE_TTL,
+                );
+                self.send_packet(packet, &mut out, now);
+            }
+            Err(e) => {
+                if matches!(e, NoiseError::SessionExpired | NoiseError::SessionExhausted) {
+                    self.session_manager.remove_session(peer);
+                    self.pending.append_typed_payload(
+                        peer,
+                        crate::features::pending_queues::PendingTypedPayload {
+                            payload,
+                            transfer_id: None,
+                        },
+                    );
+                    self.initiate_handshake(peer, &mut out, now);
+                }
+            }
+        }
+        out.next_wake_ms = self.next_wake(now);
+        out
+    }
+
+    /// Send a read receipt for a private message we have now seen
+    /// (`0x02 ‖ originalMessageID.utf8`).
+    pub fn send_read_receipt(
+        &mut self,
+        peer: &crate::PeerId,
+        original_message_id: &str,
+    ) -> EngineOutput {
+        self.send_typed_noise_payload(
+            peer,
+            crate::types::NoisePayloadType::ReadReceipt.as_u8(),
+            original_message_id.as_bytes(),
+        )
+    }
+
+    /// Send a delivery ACK for a received private message
+    /// (`0x03 ‖ messageID.utf8`).
+    pub fn send_delivery_ack(&mut self, peer: &crate::PeerId, message_id: &str) -> EngineOutput {
+        self.send_typed_noise_payload(
+            peer,
+            crate::types::NoisePayloadType::Delivered.as_u8(),
+            message_id.as_bytes(),
+        )
+    }
+
+    /// Broadcast a file to the mesh (signed `fileTransfer`, v2-framed by the
+    /// fragmenter for large payloads).
+    pub fn send_file_broadcast(
+        &mut self,
+        file_name: &str,
+        mime_type: &str,
+        content: &[u8],
+    ) -> EngineOutput {
+        let mut out = EngineOutput::default();
+        let now = (self.now_ms)();
+        let Some(encoded) =
+            crate::protocol::file::BitchatFilePacket::new(file_name, mime_type, content.to_vec())
+                .encode()
+        else {
+            out.events.push(EngineEvent::MessageDeliveryStatusUpdated {
+                message_id: file_name.to_string(),
+                sending: false,
+                failed: true,
+            });
+            return out;
+        };
+        let mut packet = BitchatPacket::new(
+            MessageType::FileTransfer.as_u8(),
+            self.local_peer_id().routing_bytes(),
+            None,
+            now,
+            encoded,
+            consts::MESSAGE_TTL,
+        );
+        let preimage = packet.to_binary_data_for_signing().expect("file encodable");
+        packet.signature = Some(self.identity.sign(&preimage));
+        self.send_packet(packet, &mut out, now);
+        out.next_wake_ms = self.next_wake(now);
+        out
+    }
+
+    /// Send a file privately over Noise (`0x20 ‖ filePacket.encoded()`) with
+    /// the private-media admission rules: blocked peers and peers without a
+    /// secure path are refused.
+    pub fn send_file_private(
+        &mut self,
+        peer: &crate::PeerId,
+        file_name: &str,
+        mime_type: &str,
+        content: &[u8],
+        transfer_id: &str,
+    ) -> EngineOutput {
+        let mut out = EngineOutput::default();
+        if self.is_blocked(peer) || !self.can_deliver_securely(peer) {
+            out.events.push(EngineEvent::MessageDeliveryStatusUpdated {
+                message_id: transfer_id.to_string(),
+                sending: false,
+                failed: true,
+            });
+            return out;
+        }
+        let Some(encoded) =
+            crate::protocol::file::BitchatFilePacket::new(file_name, mime_type, content.to_vec())
+                .encode()
+        else {
+            out.events.push(EngineEvent::MessageDeliveryStatusUpdated {
+                message_id: transfer_id.to_string(),
+                sending: false,
+                failed: true,
+            });
+            return out;
+        };
+        let result = self.send_typed_noise_payload(
+            peer,
+            crate::types::NoisePayloadType::PrivateFile.as_u8(),
+            &encoded,
+        );
+        out.events.extend(result.events);
+        out.commands.extend(result.commands);
+        out.events.push(EngineEvent::MessageDeliveryStatusUpdated {
+            message_id: transfer_id.to_string(),
+            sending: true,
+            failed: false,
+        });
+        out.next_wake_ms = result.next_wake_ms;
+        out
+    }
+
+    /// Send a push-to-talk voice burst. `peer == None` broadcasts a signed
+    /// `voiceFrame` (0x29); `Some(peer)` sends privately (`0x08` Noise
+    /// payload). Bursts without a live private session are dropped (parity:
+    /// Swift `sendVoiceFrame`).
+    pub fn send_voice_burst(
+        &mut self,
+        burst: crate::protocol::voice::VoiceBurstPacket,
+        peer: Option<&crate::PeerId>,
+    ) -> EngineOutput {
+        let mut out = EngineOutput::default();
+        let now = (self.now_ms)();
+        let Some(encoded) = burst.encode() else {
+            return out;
+        };
+        match peer {
+            None => {
+                let mut packet = BitchatPacket::new(
+                    MessageType::VoiceFrame.as_u8(),
+                    self.local_peer_id().routing_bytes(),
+                    None,
+                    now,
+                    encoded,
+                    consts::MESSAGE_TTL,
+                );
+                let preimage = packet
+                    .to_binary_data_for_signing()
+                    .expect("voice encodable");
+                packet.signature = Some(self.identity.sign(&preimage));
+                self.send_packet(packet, &mut out, now);
+            }
+            Some(p) => {
+                let result = self.send_typed_noise_payload(
+                    p,
+                    crate::types::NoisePayloadType::VoiceFrame.as_u8(),
+                    &encoded,
+                );
+                out.events.extend(result.events);
+                out.commands.extend(result.commands);
+            }
+        }
+        out.next_wake_ms = self.next_wake(now);
+        out
+    }
+
     /// Send a mesh ping probe.
     pub fn send_mesh_ping(&mut self, peer: &crate::PeerId) -> EngineOutput {
         let mut out = EngineOutput::default();
@@ -582,6 +844,24 @@ impl MeshEngine {
     }
 
     pub fn stop_services(&mut self, out: &mut EngineOutput) {
+        let now = (self.now_ms)();
+        // Signed LEAVE broadcast so peers drop us cleanly (parity: bitchat
+        // broadcasts LEAVE synchronously on stopServices).
+        if self.radio_state == RadioState::PoweredOn {
+            let mut packet = BitchatPacket::new(
+                MessageType::Leave.as_u8(),
+                self.local_peer_id().routing_bytes(),
+                None,
+                now,
+                Vec::new(),
+                consts::MESSAGE_TTL,
+            );
+            let preimage = packet
+                .to_binary_data_for_signing()
+                .expect("leave encodable");
+            packet.signature = Some(self.identity.sign(&preimage));
+            self.send_packet(packet, out, now);
+        }
         if self.scanning {
             self.scanning = false;
             out.commands.push(LinkCommand::StopScan);
@@ -692,6 +972,10 @@ impl MeshEngine {
             return;
         }
 
+        // Traffic tracking feeds the announce cadence (bitchat: any packet
+        // within the last 5 s counts as recent traffic → 10 s cadence).
+        self.last_packet_ms = Some(now);
+
         let sender = crate::PeerId::from_routing_bytes(&packet.sender_id);
 
         // Raw announce binding: a direct (ttl == 7) announce binds the link.
@@ -755,7 +1039,9 @@ impl MeshEngine {
             Some(MessageType::Pong) => self.handle_pong(&packet, &sender, out, now),
             Some(MessageType::GroupMessage) => {
                 out.events.push(EngineEvent::GroupMessageReceived {
+                    sender: sender.clone(),
                     timestamp_ms: packet.timestamp,
+                    payload: packet.payload.clone(),
                 });
                 self.schedule_relay(packet, link, &message_id, out, now);
             }
@@ -1088,6 +1374,21 @@ impl MeshEngine {
         }
         // Re-announce with force so the peer sees us connected.
         self.send_announce(true, out, now);
+        // 0x21 exchange: tell the peer our capabilities + signing key (parity:
+        // bitchat sends AuthenticatedPeerState on every session establishment).
+        {
+            let state = crate::protocol::capabilities::authenticated_peer_state(
+                self.capabilities,
+                &self.identity.signing_public(),
+            );
+            let sent = self.send_typed_noise_payload(
+                peer,
+                crate::types::NoisePayloadType::AuthenticatedPeerState.as_u8(),
+                &state,
+            );
+            out.events.extend(sent.events);
+            out.commands.extend(sent.commands);
+        }
         // Drain queued private messages for this peer (one-shot FIFO;
         // failures would re-queue at the front to keep order).
         let queued = self.pending.take_private_messages(peer);
@@ -1111,6 +1412,61 @@ impl MeshEngine {
         if !failed.is_empty() {
             self.pending.prepend_private_messages(peer, failed);
         }
+        // Drain queued typed payloads (receipts, files, voice, peer state).
+        let typed = self.pending.take_typed_payloads(peer);
+        for queued_payload in typed {
+            let (payload_type, body) = queued_payload
+                .payload
+                .split_first()
+                .map(|(t, rest)| (*t, rest.to_vec()))
+                .unwrap_or((0, Vec::new()));
+            let drained = self.send_typed_noise_payload(peer, payload_type, &body);
+            out.events.extend(drained.events);
+            out.commands.extend(drained.commands);
+        }
+        // Courier: spray carried copies to trusted (courier-tier) peers we
+        // now share a session with (parity: transferSprayCopies on encounter).
+        if self.courier_tier_for(peer).is_some() {
+            let noise_key = self
+                .registry
+                .get(peer)
+                .map(|p| p.noise_public_key)
+                .unwrap_or([0u8; 32]);
+            let envelopes = self.courier.transfer_spray_copies(&noise_key);
+            for stored in envelopes {
+                let wire = CourierEnvelope::new(
+                    stored.recipient_tag.clone(),
+                    stored.expiry,
+                    stored.ciphertext.clone(),
+                    1,
+                    stored.prekey_id,
+                );
+                let Some(bytes) = wire.encode() else { continue };
+                let mut packet = BitchatPacket::new(
+                    MessageType::CourierEnvelope.as_u8(),
+                    self.local_peer_id().routing_bytes(),
+                    Some(peer.routing_bytes()),
+                    now,
+                    bytes,
+                    consts::MESSAGE_TTL,
+                );
+                let preimage = packet
+                    .to_binary_data_for_signing()
+                    .expect("envelope encodable");
+                packet.signature = Some(self.identity.sign(&preimage));
+                self.send_packet(packet, out, now);
+            }
+        }
+    }
+
+    /// The courier deposit tier a peer qualifies for under the active policy
+    /// (favorite → Favorite, verified → Verified, else None).
+    fn courier_tier_for(
+        &self,
+        peer: &crate::PeerId,
+    ) -> Option<crate::features::courier::CourierTier> {
+        let info = self.registry.get(peer)?;
+        (self.courier_policy)(peer, info.is_favorite, info.is_verified)
     }
 
     fn handle_encrypted(
@@ -1143,9 +1499,60 @@ impl MeshEngine {
                                 payload_type,
                                 payload,
                             });
-                            // Implicit DELIVERED ack behavior lives in the
-                            // features layer.
                             let _ = pm;
+                        }
+                    }
+                    Some(NoisePayloadType::ReadReceipt) => {
+                        out.events.push(EngineEvent::NoisePayloadReceived {
+                            peer: sender.clone(),
+                            payload_type,
+                            payload,
+                        });
+                    }
+                    Some(NoisePayloadType::Delivered) => {
+                        out.events.push(EngineEvent::NoisePayloadReceived {
+                            peer: sender.clone(),
+                            payload_type,
+                            payload,
+                        });
+                    }
+                    Some(NoisePayloadType::AuthenticatedPeerState) => {
+                        // Capability + signing-key exchange: pin into the
+                        // registry (parity: bitchat consumes 0x21 internally).
+                        if let Some((caps, signing)) =
+                            crate::protocol::capabilities::parse_authenticated_peer_state(&payload)
+                        {
+                            if let Some(info) = self.registry.get_mut(sender) {
+                                info.capabilities = Some(caps);
+                                if info.signing_public_key == signing
+                                    || info.pinned_signing_key == Some(signing)
+                                {
+                                    info.signing_public_key = signing;
+                                    info.pinned_signing_key = Some(signing);
+                                }
+                            }
+                        }
+                    }
+                    Some(NoisePayloadType::PrivateFile) => {
+                        // Typed private media (0x20): decode + surface as a
+                        // file event so the UI has one file pipeline.
+                        if let Some(file) =
+                            crate::protocol::file::BitchatFilePacket::decode(&payload)
+                        {
+                            out.events.push(EngineEvent::FileTransferReceived {
+                                sender: sender.clone(),
+                                file,
+                            });
+                        }
+                    }
+                    Some(NoisePayloadType::LegacyPrivateFile) => {
+                        if let Some(file) =
+                            crate::protocol::file::BitchatFilePacket::decode(&payload)
+                        {
+                            out.events.push(EngineEvent::FileTransferReceived {
+                                sender: sender.clone(),
+                                file,
+                            });
                         }
                     }
                     _ => {
@@ -1608,6 +2015,11 @@ impl MeshEngine {
         let Some(info) = self.registry.get(sender).cloned() else {
             return;
         };
+        // Blocked senders cannot deposit (parity: Swift drops courier
+        // envelopes from blocked identities).
+        if self.is_blocked(sender) {
+            return;
+        }
         // The packet's signature must verify against the announced key.
         if let Some(signature) = &packet.signature {
             let Some(preimage) = packet.to_binary_data_for_signing() else {
@@ -1697,7 +2109,10 @@ impl MeshEngine {
             .last_announce_ms
             .map(|t| (now.saturating_sub(t)) as f64 / 1000.0)
             .unwrap_or(f64::MAX);
-        let recent_traffic = false; // simplified: the engine's dedup activity feeds this in a full port
+        let recent_traffic = self
+            .last_packet_ms
+            .map(|t| now.saturating_sub(t) < 5_000)
+            .unwrap_or(false);
         if announce::should_announce(
             self.maintenance_cycle,
             self.registry.degree(),
@@ -1710,6 +2125,9 @@ impl MeshEngine {
         // Fragment expiry + dedup cleanup.
         self.fragments.remove_expired(now);
         self.dedup.cleanup(now);
+
+        // Carried courier envelopes expire (parity: removeExpired sweep).
+        self.courier.remove_expired(now);
 
         // Connectivity reconciliation.
         let live: Vec<crate::PeerId> = self
@@ -1733,19 +2151,21 @@ impl MeshEngine {
             now.saturating_sub(p.sent_ms) < (consts::MESH_PING_TIMEOUT_S * 1000.0) as u64
         });
 
-        // Gossip rounds: build REQUEST_SYNC for due store classes.
+        // Gossip rounds: build REQUEST_SYNC for due store classes — unicast
+        // to EVERY connected peer with broadcast fallback (parity: Swift
+        // `GossipSyncManager` periodic rounds).
         if let Some(classes) = self.gossip.sync_due() {
             if let Some(request) = self.gossip.build_request(&classes) {
                 if let Some(payload) = request.encode() {
-                    let target = self.registry.connected_peers().first().cloned();
-                    if let Some(peer) = target {
+                    let targets = self.registry.connected_peers();
+                    for peer in targets {
                         self.gossip.request_manager.record_request(&peer, now);
                         let mut packet = BitchatPacket::new(
                             MessageType::RequestSync.as_u8(),
                             self.local_peer_id().routing_bytes(),
                             Some(peer.routing_bytes()),
                             now,
-                            payload,
+                            payload.clone(),
                             0, // link-local
                         );
                         let preimage = packet.to_binary_data_for_signing().expect("sync encodable");
@@ -1756,7 +2176,8 @@ impl MeshEngine {
             }
         }
 
-        // Initial sync to freshly connected peers (5 s after connect).
+        // Initial sync to freshly connected peers (1 s after connect —
+        // parity: Swift `scheduleInitialSyncToPeer` delay).
         let initial_delay = consts::SYNC_INITIAL_SYNC_DELAY_S * 1000;
         // Snapshot + one-shot pass (the closure cannot borrow the engine).
         let pending: Vec<(crate::PeerId, u64)> = std::mem::take(&mut self.initial_synced);

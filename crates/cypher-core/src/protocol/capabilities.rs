@@ -66,6 +66,60 @@ impl PeerCapabilities {
     }
 }
 
+/// `AuthenticatedPeerState` (Noise payload 0x21) — versioned TLV, exact port
+/// of bitchat's `Packets.swift`:
+/// `[version=0x01][0x01][len][capabilities][0x02][32][signingPublicKey]`.
+pub fn authenticated_peer_state(
+    capabilities: PeerCapabilities,
+    signing_public_key: &[u8; 32],
+) -> Vec<u8> {
+    let caps = capabilities.encode();
+    let mut out = Vec::with_capacity(1 + 2 + caps.len() + 2 + 32);
+    out.push(0x01); // version
+    out.push(0x01); // TLV type: capabilities
+    out.push(caps.len() as u8);
+    out.extend_from_slice(&caps);
+    out.push(0x02); // TLV type: signingPublicKey
+    out.push(32);
+    out.extend_from_slice(signing_public_key);
+    out
+}
+
+/// Parse an `AuthenticatedPeerState` payload. Unknown TLVs are skipped for
+/// forward compatibility; wrong version / bad lengths / duplicates / missing
+/// fields return `None` without touching caller state (parity: Swift decode).
+pub fn parse_authenticated_peer_state(data: &[u8]) -> Option<(PeerCapabilities, [u8; 32])> {
+    if data.first() != Some(&0x01) {
+        return None; // version
+    }
+    let mut offset = 1usize;
+    let mut capabilities: Option<PeerCapabilities> = None;
+    let mut signing: Option<[u8; 32]> = None;
+    while offset < data.len() {
+        if offset + 2 > data.len() {
+            return None;
+        }
+        let tlv_type = data[offset];
+        let length = data[offset + 1] as usize;
+        offset += 2;
+        if offset + length > data.len() {
+            return None;
+        }
+        let value = &data[offset..offset + length];
+        match tlv_type {
+            0x01 if capabilities.is_none() && !value.is_empty() && length <= 8 => {
+                capabilities = PeerCapabilities::decode(value);
+            }
+            0x02 if signing.is_none() && length == 32 => {
+                signing = Some(value.try_into().ok()?);
+            }
+            _ => {} // unknown TLV: skip (forward compatibility)
+        }
+        offset += length;
+    }
+    Some((capabilities?, signing?))
+}
+
 impl serde::Serialize for PeerCapabilities {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_u64(self.0)
@@ -82,6 +136,59 @@ mod tests {
         assert_eq!(PeerCapabilities(1).encode(), vec![0x01]);
         assert_eq!(PeerCapabilities(0x0100).encode(), vec![0x00, 0x01]);
         assert_eq!(PeerCapabilities(0xFF).encode(), vec![0xFF]);
+    }
+
+    #[test]
+    fn authenticated_peer_state_round_trip() {
+        let key = [0xABu8; 32];
+        let caps = PeerCapabilities::local_supported();
+        let encoded = authenticated_peer_state(caps, &key);
+        // Exact wire layout: version, caps TLV, key TLV.
+        assert_eq!(encoded[0], 0x01);
+        assert_eq!(encoded[1], 0x01);
+        let caps_len = encoded[2] as usize;
+        assert_ne!(caps_len, 0);
+        assert_eq!(encoded[3 + caps_len], 0x02);
+        assert_eq!(encoded[4 + caps_len], 32);
+        assert_eq!(encoded.len(), 5 + caps_len + 32);
+
+        let (parsed_caps, parsed_key) = parse_authenticated_peer_state(&encoded).unwrap();
+        assert_eq!(parsed_caps, caps);
+        assert_eq!(parsed_key, key);
+    }
+
+    #[test]
+    fn authenticated_peer_state_rejects_bad_input() {
+        let key = [0xCDu8; 32];
+        let good = authenticated_peer_state(PeerCapabilities::local_supported(), &key);
+        // Wrong version.
+        let mut bad = good.clone();
+        bad[0] = 0x02;
+        assert!(parse_authenticated_peer_state(&bad).is_none());
+        // Truncated TLV.
+        assert!(parse_authenticated_peer_state(&good[..good.len() - 5]).is_none());
+        // Missing signing key TLV (only caps present).
+        let caps = PeerCapabilities::local_supported().encode();
+        let mut only_caps = vec![0x01, 0x01, caps.len() as u8];
+        only_caps.extend_from_slice(&caps);
+        assert!(parse_authenticated_peer_state(&only_caps).is_none());
+        // Empty.
+        assert!(parse_authenticated_peer_state(&[]).is_none());
+    }
+
+    #[test]
+    fn authenticated_peer_state_skips_unknown_tlv() {
+        let key = [0xEFu8; 32];
+        let encoded = authenticated_peer_state(PeerCapabilities(0x21), &key);
+        // Splice in an unknown TLV (0x7F, 3 bytes) between the known ones.
+        let caps_len = encoded[2] as usize;
+        let mut with_unknown = Vec::new();
+        with_unknown.extend_from_slice(&encoded[..3 + caps_len]);
+        with_unknown.extend_from_slice(&[0x7F, 0x03, 9, 9, 9]);
+        with_unknown.extend_from_slice(&encoded[3 + caps_len..]);
+        let (caps, parsed_key) = parse_authenticated_peer_state(&with_unknown).unwrap();
+        assert_eq!(caps, PeerCapabilities(0x21));
+        assert_eq!(parsed_key, key);
     }
 
     #[test]

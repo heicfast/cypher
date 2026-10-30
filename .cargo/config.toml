@@ -11,6 +11,7 @@ rustflags = [
     "--remap-path-prefix=/home/z/my-project/cypher=/cypher",
     "--remap-path-prefix=/home/runner/work/cypher/cypher=/cypher",
     "--remap-path-prefix=/home/z/cypher=/cypher",
+    "--remap-path-prefix=/home/z/work/cypher=/cypher",
     "--remap-path-prefix=/home/z/.cargo=/cargo",
     "--remap-path-prefix=/home/runner/.cargo=/cargo",
 ]

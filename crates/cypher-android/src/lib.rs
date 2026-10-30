@@ -19,7 +19,7 @@ use cypher_core::identity::{CypherIdentity, FileIdentityStore, IdentityStore};
 use cypher_core::mesh::engine::{EngineOutput, MeshEngine};
 use cypher_core::mesh::{LinkDirection, LinkEvent, LinkId, RadioState};
 use jni::objects::{JClass, JObject, JString};
-use jni::sys::{jbyte, jbyteArray, jint, jlong, jobjectArray};
+use jni::sys::{jboolean, jbyte, jbyteArray, jint, jlong, jobjectArray};
 use jni::JNIEnv;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -341,20 +341,352 @@ pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeStateJso
                     "nickname": p.nickname,
                     "connected": p.is_connected,
                     "verified": p.is_verified,
+                    "favorite": p.is_favorite,
                     "secureSession": holder.engine.has_established_session(&p.peer_id),
+                    "lastSeenMs": p.last_seen_ms,
+                    "noisePublicKey": cypher_core::util::hex_encode(&p.noise_public_key),
+                    "signingPublicKey": cypher_core::util::hex_encode(&p.signing_public_key),
                 })
             })
+            .collect();
+        let blocked: Vec<String> = holder
+            .engine
+            .blocked_peers()
+            .into_iter()
+            .map(|p| p.as_str().to_string())
             .collect();
         serde_json::json!({
             "peerId": holder.engine.local_peer_id().as_str(),
             "fingerprint": holder.identity.fingerprint(),
             "nickname": holder.engine.nickname(),
             "peers": peers,
+            "blocked": blocked,
         })
         .to_string()
     });
     match response {
         Some(json) => vec_to_jbytes(&env, json.as_bytes()),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Change the nickname and force-broadcast an announce (parity: bitchat's
+/// `setNickname`).
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSetNickname(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    nickname: JString,
+) -> jbyteArray {
+    let nickname: String = env
+        .get_string(&nickname)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let response = with_engine(handle, |holder| {
+        let output = holder.engine.set_nickname(nickname);
+        frame_output(&output)
+    });
+    match response {
+        Some(blob) => vec_to_jbytes(&env, &blob),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Send an arbitrary typed Noise payload (0x02 receipts, 0x03 ACKs, 0x06/0x07
+/// group payloads, 0x08 voice, 0x10/0x11 verify, 0x12 vouch…).
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSendTypedNoisePayload(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    peer_hex: JString,
+    payload_type: jint,
+    body: jbyteArray,
+) -> jbyteArray {
+    let peer_hex: String = env
+        .get_string(&peer_hex)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let body = jbytes_to_vec(&env, body).unwrap_or_default();
+    let response = with_engine(handle, |holder| {
+        let peer = cypher_core::PeerId::new(peer_hex);
+        let output = holder
+            .engine
+            .send_typed_noise_payload(&peer, payload_type as u8, &body);
+        frame_output(&output)
+    });
+    match response {
+        Some(blob) => vec_to_jbytes(&env, &blob),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Send a read receipt for a private message we have now seen.
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSendReadReceipt(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    peer_hex: JString,
+    message_id: JString,
+) -> jbyteArray {
+    let peer_hex: String = env
+        .get_string(&peer_hex)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let message_id: String = env
+        .get_string(&message_id)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let response = with_engine(handle, |holder| {
+        let peer = cypher_core::PeerId::new(peer_hex);
+        let output = holder.engine.send_read_receipt(&peer, &message_id);
+        frame_output(&output)
+    });
+    match response {
+        Some(blob) => vec_to_jbytes(&env, &blob),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Send a delivery ACK for a received private message.
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSendDeliveryAck(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    peer_hex: JString,
+    message_id: JString,
+) -> jbyteArray {
+    let peer_hex: String = env
+        .get_string(&peer_hex)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let message_id: String = env
+        .get_string(&message_id)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let response = with_engine(handle, |holder| {
+        let peer = cypher_core::PeerId::new(peer_hex);
+        let output = holder.engine.send_delivery_ack(&peer, &message_id);
+        frame_output(&output)
+    });
+    match response {
+        Some(blob) => vec_to_jbytes(&env, &blob),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Broadcast a file to the mesh (signed fileTransfer packet).
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSendFileBroadcast(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    file_name: JString,
+    mime_type: JString,
+    content: jbyteArray,
+) -> jbyteArray {
+    let file_name: String = env
+        .get_string(&file_name)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let mime_type: String = env
+        .get_string(&mime_type)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let content = jbytes_to_vec(&env, content).unwrap_or_default();
+    let response = with_engine(handle, |holder| {
+        let output = holder
+            .engine
+            .send_file_broadcast(&file_name, &mime_type, &content);
+        frame_output(&output)
+    });
+    match response {
+        Some(blob) => vec_to_jbytes(&env, &blob),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Send a file privately over Noise (0x20 typed payload).
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSendFilePrivate(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    peer_hex: JString,
+    file_name: JString,
+    mime_type: JString,
+    content: jbyteArray,
+    transfer_id: JString,
+) -> jbyteArray {
+    let peer_hex: String = env
+        .get_string(&peer_hex)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let file_name: String = env
+        .get_string(&file_name)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let mime_type: String = env
+        .get_string(&mime_type)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let content = jbytes_to_vec(&env, content).unwrap_or_default();
+    let transfer_id: String = env
+        .get_string(&transfer_id)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let response = with_engine(handle, |holder| {
+        let peer = cypher_core::PeerId::new(peer_hex);
+        let output =
+            holder
+                .engine
+                .send_file_private(&peer, &file_name, &mime_type, &content, &transfer_id);
+        frame_output(&output)
+    });
+    match response {
+        Some(blob) => vec_to_jbytes(&env, &blob),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Send a push-to-talk voice burst. Empty `peer_hex` broadcasts a signed
+/// voiceFrame (0x29); otherwise the burst goes privately (0x08 Noise payload).
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSendVoiceBurst(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    peer_hex: JString,
+    burst_id: jbyteArray,
+    seq: jint,
+    flags: jint,
+    payload: jbyteArray,
+) -> jbyteArray {
+    let peer_hex: String = env
+        .get_string(&peer_hex)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let burst_id = jbytes_to_vec(&env, burst_id)
+        .and_then(|b| <[u8; 8]>::try_from(b).ok())
+        .unwrap_or([0u8; 8]);
+    let payload = jbytes_to_vec(&env, payload).unwrap_or_default();
+    let response = with_engine(handle, |holder| {
+        let burst = cypher_core::protocol::voice::VoiceBurstPacket {
+            burst_id,
+            seq: seq as u16,
+            flags: flags as u8,
+            payload,
+        };
+        let peer = if peer_hex.is_empty() {
+            None
+        } else {
+            Some(cypher_core::PeerId::new(peer_hex))
+        };
+        let output = holder.engine.send_voice_burst(burst, peer.as_ref());
+        frame_output(&output)
+    });
+    match response {
+        Some(blob) => vec_to_jbytes(&env, &blob),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Mark a peer favorite (drives courier tiers + UI).
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSetPeerFavorite(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    peer_hex: JString,
+    favorite: jboolean,
+) {
+    let peer_hex: String = env
+        .get_string(&peer_hex)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let _ = with_engine(handle, |holder| {
+        let peer = cypher_core::PeerId::new(peer_hex);
+        holder.engine.set_peer_favorite(&peer, favorite != 0);
+        None::<()>
+    });
+}
+
+/// Mark a peer verified (fingerprint confirmation).
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSetPeerVerified(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    peer_hex: JString,
+    verified: jboolean,
+) {
+    let peer_hex: String = env
+        .get_string(&peer_hex)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let _ = with_engine(handle, |holder| {
+        let peer = cypher_core::PeerId::new(peer_hex);
+        holder.engine.set_peer_verified(&peer, verified != 0);
+        None::<()>
+    });
+}
+
+/// Block a peer (courier deposits + private media refused).
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeBlockPeer(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    peer_hex: JString,
+) {
+    let peer_hex: String = env
+        .get_string(&peer_hex)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let _ = with_engine(handle, |holder| {
+        let peer = cypher_core::PeerId::new(peer_hex);
+        holder.engine.block_peer(&peer);
+        None::<()>
+    });
+}
+
+/// Unblock a peer.
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeUnblockPeer(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    peer_hex: JString,
+) {
+    let peer_hex: String = env
+        .get_string(&peer_hex)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let _ = with_engine(handle, |holder| {
+        let peer = cypher_core::PeerId::new(peer_hex);
+        holder.engine.unblock_peer(&peer);
+        None::<()>
+    });
+}
+
+/// Stop mesh services: broadcast a signed LEAVE, then stop scanning and
+/// advertising (parity: bitchat's stopServices).
+#[no_mangle]
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeStopServices(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jbyteArray {
+    let response = with_engine(handle, |holder| {
+        let mut output = cypher_core::mesh::engine::EngineOutput::default();
+        holder.engine.stop_services(&mut output);
+        frame_output(&output)
+    });
+    match response {
+        Some(blob) => vec_to_jbytes(&env, &blob),
         None => std::ptr::null_mut(),
     }
 }

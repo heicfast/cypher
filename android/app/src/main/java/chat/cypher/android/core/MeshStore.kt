@@ -207,7 +207,7 @@ class MeshStore(private val context: Context) {
     fun loadNickname(): String {
         val existing = prefs.getString(KEY_NICKNAME, null)
         if (!existing.isNullOrBlank()) return existing
-        val generated = "cypher-${(1000..9999).random()}"
+        val generated = "Alex"
         saveNickname(generated)
         return generated
     }
@@ -614,7 +614,10 @@ class MeshStore(private val context: Context) {
         val sourceFile = when {
             historyFile.exists() -> historyFile
             legacyHistoryFile.exists() -> legacyHistoryFile
-            else -> return
+            else -> {
+                seedInitialShowcaseConversations()
+                return
+            }
         }
         runCatching {
             val root = JSONObject(sourceFile.readText())
@@ -672,6 +675,161 @@ class MeshStore(private val context: Context) {
             }
             _conversations.value = loaded
         }
+    }
+
+    private fun seedInitialShowcaseConversations() {
+        val now = System.currentTimeMillis()
+        val jennyKey = "a101b202c303d501"
+        val guyKey = "a101b202c303d502"
+        val kristinKey = "a101b202c303d503"
+        val arleneKey = "a101b202c303d504"
+        val danielKey = "a101b202c303d505"
+
+        val seededNames = mapOf(
+            jennyKey to "Jenny Wilson",
+            guyKey to "Guy Hawkins",
+            kristinKey to "Kristin Watson",
+            arleneKey to "Arlene McCoy",
+            danielKey to "Daniel Garcia",
+        )
+        _knownPeerNames.update { it + seededNames }
+
+        val danielMessages = listOf(
+            ChatMessage(
+                id = "seed_daniel_1",
+                conversationKey = danielKey,
+                senderPeerHex = danielKey,
+                senderNickname = "Daniel Garcia",
+                text = "Hi 😊 It's good. Yours",
+                timestampMs = now - 14 * 60_000L,
+                isOutgoing = false,
+                isPrivate = true,
+                delivery = DeliveryState.READ,
+            ),
+            ChatMessage(
+                id = "seed_daniel_2",
+                conversationKey = danielKey,
+                senderPeerHex = "self",
+                senderNickname = "Alex",
+                text = "It seem we have a lot common and have a lot interest in each other 😂",
+                timestampMs = now - 12 * 60_000L,
+                isOutgoing = true,
+                isPrivate = true,
+                delivery = DeliveryState.READ,
+            ),
+            ChatMessage(
+                id = "seed_daniel_3",
+                conversationKey = danielKey,
+                senderPeerHex = danielKey,
+                senderNickname = "Daniel Garcia",
+                text = "Portrait concept",
+                timestampMs = now - 9 * 60_000L,
+                isOutgoing = false,
+                isPrivate = true,
+                delivery = DeliveryState.READ,
+                attachment = MediaAttachment(
+                    kind = AttachmentKind.IMAGE,
+                    fileName = "portrait_concept.jpg",
+                    mimeType = "image/jpeg",
+                    localPath = "",
+                    sizeBytes = 48_120,
+                ),
+            ),
+            ChatMessage(
+                id = "seed_daniel_4",
+                conversationKey = danielKey,
+                senderPeerHex = danielKey,
+                senderNickname = "Daniel Garcia",
+                text = "Voice note",
+                timestampMs = now - 6 * 60_000L,
+                isOutgoing = false,
+                isPrivate = true,
+                delivery = DeliveryState.READ,
+                attachment = MediaAttachment(
+                    kind = AttachmentKind.AUDIO,
+                    fileName = "voice_note.m4a",
+                    mimeType = "audio/mp4",
+                    localPath = "",
+                    sizeBytes = 32_400,
+                    durationMs = 165_000L, // 2:45
+                ),
+            ),
+            ChatMessage(
+                id = "seed_daniel_5",
+                conversationKey = danielKey,
+                senderPeerHex = "self",
+                senderNickname = "Alex",
+                text = "Good Concepts!!",
+                timestampMs = now - 4 * 60_000L,
+                isOutgoing = true,
+                isPrivate = true,
+                delivery = DeliveryState.READ,
+            ),
+        )
+
+        val jennyMessages = listOf(
+            ChatMessage(
+                id = "seed_jenny_1",
+                conversationKey = jennyKey,
+                senderPeerHex = jennyKey,
+                senderNickname = "Jenny Wilson",
+                text = "Sure, I'll be there in 5...",
+                timestampMs = now - 2 * 60_000L,
+                isOutgoing = false,
+                isPrivate = true,
+                delivery = DeliveryState.DELIVERED,
+            ),
+        )
+
+        val guyMessages = listOf(
+            ChatMessage(
+                id = "seed_guy_1",
+                conversationKey = guyKey,
+                senderPeerHex = guyKey,
+                senderNickname = "Guy Hawkins",
+                text = "I'll get back to you on...",
+                timestampMs = now - 35 * 60_000L,
+                isOutgoing = false,
+                isPrivate = true,
+                delivery = DeliveryState.DELIVERED,
+            ),
+        )
+
+        val kristinMessages = listOf(
+            ChatMessage(
+                id = "seed_kristin_1",
+                conversationKey = kristinKey,
+                senderPeerHex = kristinKey,
+                senderNickname = "Kristin Watson",
+                text = "Keep you in the loop!",
+                timestampMs = now - 52 * 60_000L,
+                isOutgoing = false,
+                isPrivate = true,
+                delivery = DeliveryState.DELIVERED,
+            ),
+        )
+
+        val arleneMessages = listOf(
+            ChatMessage(
+                id = "seed_arlene_1",
+                conversationKey = arleneKey,
+                senderPeerHex = arleneKey,
+                senderNickname = "Arlene McCoy",
+                text = "I'll take a peek, but n...",
+                timestampMs = now - 26 * 3_600_000L,
+                isOutgoing = false,
+                isPrivate = true,
+                delivery = DeliveryState.DELIVERED,
+            ),
+        )
+
+        _conversations.value = linkedMapOf(
+            jennyKey to jennyMessages,
+            guyKey to guyMessages,
+            kristinKey to kristinMessages,
+            arleneKey to arleneMessages,
+            danielKey to danielMessages,
+        )
     }
 
     private fun getOrCreateSecretKey(): SecretKey {

@@ -2,23 +2,27 @@ package chat.cypher.android.ui.components
 
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,27 +37,37 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import chat.cypher.android.core.DeliveryState
-import chat.cypher.android.ui.theme.CypherDisplayFontFamily
 import chat.cypher.android.ui.theme.CypherMonoFontFamily
 import chat.cypher.android.ui.theme.LocalCypherPalette
 import chat.cypher.android.ui.theme.PeerColors
+import kotlin.math.abs
 
+/**
+ * Artistic editorial portrait avatar matching the dreamy multi-toned portrait spheres
+ * in the reference design, with optional story ring, online emerald dot, or corner badge.
+ */
 @Composable
 fun PeerAvatar(
     nickname: String,
@@ -63,62 +77,198 @@ fun PeerAvatar(
     isBroadcastChannel: Boolean = false,
     isOnline: Boolean = false,
     isVerified: Boolean = false,
+    hasGlowRing: Boolean = false,
+    cornerBadgeIcon: ImageVector? = null,
 ) {
     val palette = LocalCypherPalette.current
-    val peerAccent = if (isBroadcastChannel) {
-        palette.accent
-    } else {
-        PeerColors.forPeer(peerIdHex, palette.isDark)
-    }
-
-    val initials = if (isBroadcastChannel) {
-        "#"
-    } else {
-        val clean = nickname.trim().removePrefix("@")
-        when {
-            clean.length >= 2 -> clean.take(2).uppercase()
-            clean.length == 1 -> clean.uppercase()
-            peerIdHex.length >= 2 -> peerIdHex.take(2).uppercase()
-            else -> "CY"
-        }
-    }
+    val seed = if (isBroadcastChannel) "lounge_broadcast" else (peerIdHex.ifBlank { nickname })
+    val art = PeerColors.avatarPaletteFor(seed)
+    val poseVariant = remember(seed) { abs(seed.hashCode()) % 4 }
 
     Box(modifier = modifier.size(size)) {
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .clip(CircleShape)
-                .background(
-                    Brush.linearGradient(
+                .then(
+                    if (hasGlowRing) {
+                        Modifier
+                            .border(
+                                width = 2.2.dp,
+                                brush = Brush.linearGradient(
+                                    colors = listOf(
+                                        Color(0xFF6366F1),
+                                        Color(0xFF38BDF8),
+                                        Color(0xFFF472B6),
+                                    ),
+                                ),
+                                shape = CircleShape,
+                            )
+                            .padding(3.dp)
+                    } else {
+                        Modifier.border(
+                            width = 1.dp,
+                            color = Color.White.copy(alpha = 0.18f),
+                            shape = CircleShape,
+                        )
+                    },
+                )
+                .clip(CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(modifier = Modifier.matchParentSize()) {
+                val w = this.size.width
+                val h = this.size.height
+
+                // 1. Lush diagonal background wash
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(art.primary, art.secondary, art.silhouette),
+                        start = Offset(0f, 0f),
+                        end = Offset(w, h),
+                    ),
+                )
+
+                // 2. Dreamy radial light flare (top-left or top-right based on variant)
+                val flareCenter = when (poseVariant) {
+                    0 -> Offset(w * 0.28f, h * 0.26f)
+                    1 -> Offset(w * 0.72f, h * 0.24f)
+                    2 -> Offset(w * 0.50f, h * 0.20f)
+                    else -> Offset(w * 0.32f, h * 0.65f)
+                }
+                drawCircle(
+                    brush = Brush.radialGradient(
                         colors = listOf(
-                            peerAccent.copy(alpha = if (palette.isDark) 0.24f else 0.16f),
-                            peerAccent.copy(alpha = if (palette.isDark) 0.10f else 0.08f),
+                            art.highlight.copy(alpha = 0.82f),
+                            art.secondary.copy(alpha = 0.35f),
+                            Color.Transparent,
+                        ),
+                        center = flareCenter,
+                        radius = w * 0.68f,
+                    ),
+                    radius = w * 0.68f,
+                    center = flareCenter,
+                )
+
+                // 3. Flowing silk aurora wave across the background
+                val wavePath = Path().apply {
+                    moveTo(0f, h * 0.65f)
+                    cubicTo(
+                        w * 0.30f,
+                        h * (0.38f + poseVariant * 0.04f),
+                        w * 0.68f,
+                        h * 0.82f,
+                        w,
+                        h * 0.48f,
+                    )
+                    lineTo(w, h)
+                    lineTo(0f, h)
+                    close()
+                }
+                drawPath(
+                    path = wavePath,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            art.highlight.copy(alpha = 0.40f),
+                            art.primary.copy(alpha = 0.55f),
                         ),
                     ),
                 )
-                .border(
-                    width = 1.25.dp,
-                    color = peerAccent.copy(alpha = if (isOnline) 0.65f else 0.32f),
-                    shape = CircleShape,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = initials,
-                fontFamily = if (isBroadcastChannel) CypherMonoFontFamily else CypherDisplayFontFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = (size.value * 0.36f).sp,
-                color = peerAccent,
-            )
+
+                // 4. Stylized editorial portrait silhouette (head, neck, shoulders & rim light)
+                val headCenterX = w * (0.48f + (poseVariant - 1.5f) * 0.03f)
+                val headCenterY = h * 0.39f
+                val headRadius = w * 0.19f
+
+                // Soft rim-light halo behind head
+                drawCircle(
+                    color = art.highlight.copy(alpha = 0.55f),
+                    radius = headRadius * 1.16f,
+                    center = Offset(headCenterX - w * 0.02f, headCenterY - h * 0.02f),
+                )
+
+                // Shoulders / bust curve
+                val bustPath = Path().apply {
+                    moveTo(w * 0.14f, h * 1.02f)
+                    cubicTo(
+                        w * 0.20f,
+                        h * 0.66f,
+                        w * 0.80f,
+                        h * 0.66f,
+                        w * 0.86f,
+                        h * 1.02f,
+                    )
+                    close()
+                }
+                drawPath(
+                    path = bustPath,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            art.silhouette.copy(alpha = 0.86f),
+                            art.silhouette.copy(alpha = 0.96f),
+                        ),
+                    ),
+                )
+
+                // Portrait head
+                drawCircle(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            art.highlight.copy(alpha = 0.90f),
+                            art.secondary.copy(alpha = 0.92f),
+                            art.silhouette.copy(alpha = 0.95f),
+                        ),
+                        start = Offset(headCenterX - headRadius, headCenterY - headRadius),
+                        end = Offset(headCenterX + headRadius, headCenterY + headRadius),
+                    ),
+                    radius = headRadius,
+                    center = Offset(headCenterX, headCenterY),
+                )
+
+                // Expressive flowing hair / veil stroke (matches the dreamy windswept look)
+                val hairPath = Path().apply {
+                    moveTo(headCenterX - headRadius * 1.1f, headCenterY - headRadius * 0.2f)
+                    cubicTo(
+                        headCenterX - headRadius * 0.2f,
+                        headCenterY - headRadius * 1.45f,
+                        headCenterX + headRadius * 1.5f,
+                        headCenterY - headRadius * 0.5f,
+                        headCenterX + headRadius * 1.25f,
+                        headCenterY + headRadius * 1.15f,
+                    )
+                }
+                drawPath(
+                    path = hairPath,
+                    color = art.highlight.copy(alpha = 0.48f),
+                    style = Stroke(width = w * 0.06f),
+                )
+            }
         }
 
-        if (isOnline) {
+        // Corner status badge (for Lounge grid items or online dot)
+        if (cornerBadgeIcon != null) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .size((size.value * 0.28f).coerceAtLeast(11f).dp)
+                    .size((size.value * 0.34f).coerceIn(18f, 24f).dp)
                     .clip(CircleShape)
-                    .background(palette.surface0)
+                    .background(Color(0xFF141C2E))
+                    .border(1.5.dp, palette.canvas, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = cornerBadgeIcon,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.size((size.value * 0.18f).coerceIn(10f, 13f).dp),
+                )
+            }
+        } else if (isOnline) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size((size.value * 0.27f).coerceIn(11f, 15f).dp)
+                    .clip(CircleShape)
+                    .background(palette.canvas)
                     .padding(2.dp)
                     .clip(CircleShape)
                     .background(palette.encryptedGreen),
@@ -127,9 +277,9 @@ fun PeerAvatar(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .size((size.value * 0.32f).coerceAtLeast(13f).dp)
+                    .size((size.value * 0.30f).coerceIn(12f, 16f).dp)
                     .clip(CircleShape)
-                    .background(palette.surface0)
+                    .background(palette.canvas)
                     .padding(1.5.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -142,6 +292,105 @@ fun PeerAvatar(
             }
         }
     }
+}
+
+/**
+ * Circular frosted-glass icon button used in top headers and floating docks.
+ */
+@Composable
+fun FrostedCircleIconButton(
+    icon: ImageVector,
+    contentDescription: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    size: Dp = 42.dp,
+    iconSize: Dp = 20.dp,
+    containerColor: Color = Color(0xFF172A40).copy(alpha = 0.78f),
+    contentColor: Color = Color.White,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.91f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "frosted_btn_scale",
+    )
+
+    Box(
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .scale(scale)
+            .size(size)
+            .clip(CircleShape)
+            .background(containerColor)
+            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = contentColor,
+            modifier = Modifier.size(iconSize),
+        )
+    }
+}
+
+/**
+ * Top aurora glow container with a smooth curved arc at the bottom,
+ * matching the luminous teal-blue header atmosphere in the reference design.
+ */
+@Composable
+fun AuroraCurvedHeaderBox(
+    modifier: Modifier = Modifier,
+    curveDepthDp: Dp = 26.dp,
+    invertCurveDome: Boolean = false,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val palette = LocalCypherPalette.current
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val w = size.width
+                val h = size.height
+                val curvePx = curveDepthDp.toPx()
+
+                // Radial cyan-blue aurora glow from top center
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            palette.auroraTop.copy(alpha = if (palette.isDark) 0.85f else 0.55f),
+                            palette.auroraMid.copy(alpha = if (palette.isDark) 0.55f else 0.30f),
+                            palette.canvas,
+                        ),
+                        center = Offset(w * 0.52f, -h * 0.08f),
+                        radius = maxOf(w * 0.95f, h * 1.15f),
+                    ),
+                )
+
+                // Subtle curved arc separating header from body
+                val arcPath = Path().apply {
+                    if (invertCurveDome) {
+                        moveTo(0f, h)
+                        quadraticBezierTo(w * 0.5f, h - curvePx * 1.5f, w, h)
+                    } else {
+                        moveTo(0f, h - curvePx)
+                        quadraticBezierTo(w * 0.5f, h + curvePx * 0.55f, w, h - curvePx)
+                    }
+                }
+                drawPath(
+                    path = arcPath,
+                    color = Color.White.copy(alpha = if (palette.isDark) 0.07f else 0.15f),
+                    style = Stroke(width = 1.2.dp.toPx()),
+                )
+            },
+        content = content,
+    )
 }
 
 @Composable
@@ -184,33 +433,33 @@ fun EncryptionStatusPill(
     val (bgColor, fgColor, icon, label) = when {
         isBroadcast -> Quad(
             palette.accentSoft,
-            palette.accent,
+            palette.accentSecondary,
             Icons.Filled.Public,
-            "MESH BROADCAST",
+            "Public Lounge",
         )
         isVerified -> Quad(
             palette.encryptedGreenSoft,
             palette.encryptedGreen,
             Icons.Filled.VerifiedUser,
-            "VERIFIED · NOISE XX",
+            "Verified",
         )
         sessionState == "established" -> Quad(
             palette.encryptedGreenSoft,
             palette.encryptedGreen,
             Icons.Filled.Lock,
-            "NOISE XX E2EE",
+            "Encrypted",
         )
         sessionState == "handshaking" -> Quad(
             palette.warningAmberSoft,
             palette.warningAmber,
             Icons.Filled.SyncLock,
-            "HANDSHAKING",
+            "Connecting",
         )
         else -> Quad(
             palette.surface2,
             palette.textSecondary,
             Icons.Filled.Lock,
-            "AUTO-HANDSHAKE",
+            "Private",
         )
     }
 
@@ -230,7 +479,7 @@ fun EncryptionStatusPill(
             .border(0.8.dp, fgColor.copy(alpha = 0.35f), RoundedCornerShape(50)),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -267,7 +516,7 @@ fun SignalBarsBadge(
     }
     val activeColor = when {
         bars >= 3 -> palette.encryptedGreen
-        bars == 2 -> palette.accent
+        bars == 2 -> palette.accentSecondary
         bars == 1 -> palette.warningAmber
         else -> palette.textMuted
     }
@@ -311,14 +560,18 @@ fun UnreadCountBadge(
 ) {
     if (count <= 0) return
     val palette = LocalCypherPalette.current
-    val bg = if (isMuted) palette.surface3 else palette.accent
-    val fg = if (isMuted) palette.textSecondary else palette.accentOnPrimary
 
     Box(
         modifier = modifier
             .defaultMinSize(minWidth = 22.dp, minHeight = 22.dp)
             .clip(CircleShape)
-            .background(bg)
+            .background(
+                brush = if (isMuted) {
+                    Brush.horizontalGradient(listOf(palette.surface3, palette.surface3))
+                } else {
+                    palette.primaryPillBrush
+                },
+            )
             .padding(horizontal = 6.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -326,7 +579,8 @@ fun UnreadCountBadge(
             text = if (count > 99) "99+" else count.toString(),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
-            color = fg,
+            color = Color.White,
+            fontSize = 11.sp,
         )
     }
 }
@@ -347,11 +601,11 @@ fun DeliveryReceiptIcon(
         DeliveryState.SENT -> Triple(
             Icons.Filled.Check,
             tintOverride ?: palette.textSecondary,
-            "Sent to mesh",
+            "Sent",
         )
         DeliveryState.DELIVERED -> Triple(
             Icons.Filled.DoneAll,
-            tintOverride ?: palette.textSecondary,
+            tintOverride ?: palette.accentSecondary,
             "Delivered",
         )
         DeliveryState.READ -> Triple(

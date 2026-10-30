@@ -432,34 +432,34 @@ private fun PermissionExplanationScreen(
         ) {
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Brand badge
+            // Brand Hero Header
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(palette.accentSoft)
-                        .border(1.dp, palette.accent.copy(alpha = 0.4f), RoundedCornerShape(14.dp)),
+                        .size(52.dp)
+                        .clip(CircleShape)
+                        .background(palette.primaryPillBrush)
+                        .border(1.5.dp, Color.White.copy(alpha = 0.28f), CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Radar,
+                        imageVector = Icons.Filled.Lock,
                         contentDescription = null,
-                        tint = palette.accent,
-                        modifier = Modifier.size(26.dp),
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp),
                     )
                 }
                 Column {
                     Text(
-                        text = "CYPHER MESH",
+                        text = "WELCOME TO CYPHER",
                         style = MaterialTheme.typography.labelMedium,
-                        color = palette.accent,
+                        color = palette.accentSecondary,
                     )
                     Text(
-                        text = "Off-Grid Encrypted Messaging",
+                        text = "Private Instant Messaging",
                         style = MaterialTheme.typography.headlineMedium,
                         color = palette.textPrimary,
                     )
@@ -467,21 +467,21 @@ private fun PermissionExplanationScreen(
             }
 
             Text(
-                text = "Zero servers. Zero phone numbers. Messages hop directly between nearby devices over Bluetooth Low Energy using Noise XX end-to-end encryption.",
+                text = "Connect, share voice notes, and message people around you with end-to-end encryption — even without Wi-Fi or mobile data.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = palette.textSecondary,
             )
 
             // Privacy Guarantee Card
             Surface(
-                color = palette.encryptedGreenSoft,
-                shape = RoundedCornerShape(16.dp),
+                color = palette.surface1,
+                shape = RoundedCornerShape(20.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(
                         width = 1.dp,
-                        color = palette.encryptedGreen.copy(alpha = 0.35f),
-                        shape = RoundedCornerShape(16.dp),
+                        color = palette.accent.copy(alpha = 0.35f),
+                        shape = RoundedCornerShape(20.dp),
                     ),
             ) {
                 Row(
@@ -497,12 +497,12 @@ private fun PermissionExplanationScreen(
                     )
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = "Cryptographic Privacy Architecture",
+                            text = "Private by Design",
                             style = MaterialTheme.typography.titleSmall,
                             color = palette.textPrimary,
                         )
                         Text(
-                            text = "Your X25519 + Ed25519 keys are generated on-device and sealed in the Android Keystore. Cypher has no accounts, no telemetry, and no internet permission.",
+                            text = "No phone number or sign-up required. Your encryption keys stay privately on your device.",
                             style = MaterialTheme.typography.bodySmall,
                             color = palette.textSecondary,
                         )
@@ -511,7 +511,7 @@ private fun PermissionExplanationScreen(
             }
 
             Text(
-                text = "REQUIRED SYSTEM PERMISSIONS",
+                text = "QUICK SETUP",
                 style = MaterialTheme.typography.labelMedium,
                 color = palette.textMuted,
                 modifier = Modifier.padding(top = 4.dp),
@@ -519,20 +519,20 @@ private fun PermissionExplanationScreen(
 
             PermissionFeatureCard(
                 icon = Icons.Filled.Bluetooth,
-                title = "Nearby Bluetooth Devices",
-                description = "Advertise your ephemeral node presence and relay encrypted multi-hop frames with nearby peers.",
+                title = "Nearby Discovery",
+                description = "Find friends and join the Live Lounge with people nearby.",
             )
 
             PermissionFeatureCard(
                 icon = Icons.Filled.Notifications,
-                title = "Direct Message & Mesh Alerts",
-                description = "Receive instant alerts for Noise XX private messages and keep the foreground mesh relay active.",
+                title = "Instant Message Alerts",
+                description = "Get notified right away when someone sends you a message or voice note.",
             )
 
             PermissionFeatureCard(
                 icon = Icons.Filled.Lock,
-                title = "End-to-End Verification",
-                description = "Compare SHA-256 safety numbers out-of-band to verify peer identities against active MITM attacks.",
+                title = "Verified Encryption",
+                description = "Every message, photo, and voice note is end-to-end encrypted.",
             )
         }
 
@@ -547,14 +547,14 @@ private fun PermissionExplanationScreen(
                     .fillMaxWidth()
                     .height(54.dp)
                     .testTag("onboarding_grant_permissions_button"),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(50),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = palette.accent,
-                    contentColor = palette.accentOnPrimary,
+                    contentColor = Color.White,
                 ),
             ) {
                 Text(
-                    text = "Grant Mesh Permissions",
+                    text = "Continue",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                 )
@@ -571,9 +571,9 @@ private fun PermissionExplanationScreen(
                 modifier = Modifier.testTag("onboarding_skip_permissions_button"),
             ) {
                 Text(
-                    text = "Preview UI without BLE hardware",
+                    text = "Explore Messages Now",
                     style = MaterialTheme.typography.bodySmall,
-                    color = palette.textMuted,
+                    color = palette.accentSecondary,
                 )
             }
         }
@@ -1014,12 +1014,12 @@ private fun InitializingMeshScreen() {
             )
         }
         Text(
-            text = "INITIALIZING CYPHER NODE",
+            text = "OPENING MESSAGES",
             style = MaterialTheme.typography.labelMedium.copy(fontFamily = CypherMonoFontFamily),
-            color = palette.accent,
+            color = palette.accentSecondary,
         )
         Text(
-            text = "Unsealing X25519 identity & starting BLE mesh…",
+            text = "Preparing your conversations…",
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = CypherDisplayFontFamily),
             color = palette.textSecondary,
             textAlign = TextAlign.Center,

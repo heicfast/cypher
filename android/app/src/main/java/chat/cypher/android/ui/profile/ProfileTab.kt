@@ -20,11 +20,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -73,6 +75,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import chat.cypher.android.core.PeerIdentity
 import chat.cypher.android.onboarding.BatteryOptimizationHelper
+import chat.cypher.android.ui.components.AuroraCurvedHeaderBox
+import chat.cypher.android.ui.components.FrostedCircleIconButton
 import chat.cypher.android.ui.components.PeerAvatar
 import chat.cypher.android.ui.theme.CypherMonoFontFamily
 import chat.cypher.android.ui.theme.LocalCypherPalette
@@ -95,6 +99,7 @@ fun ProfileTab(
     onSetThemePreference: (ThemePreference) -> Unit,
     onOpenGuide: () -> Unit,
     onPanicWipe: () -> Unit,
+    onBackToMessages: () -> Unit = {},
 ) {
     val palette = LocalCypherPalette.current
     val context = LocalContext.current
@@ -142,202 +147,208 @@ fun ProfileTab(
             .fillMaxSize()
             .background(palette.canvas)
             .testTag("profile_settings_list"),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(bottom = 112.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // Top Curved Aurora Header + Hero Portrait
         item(key = "header") {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+            AuroraCurvedHeaderBox(
+                curveDepthDp = 28.dp,
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = "Identity & Node",
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = palette.textPrimary,
-                    )
-                    Text(
-                        text = "Cryptographic keys, mesh relay & appearance",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.textSecondary,
-                    )
-                }
-
-                IconButton(
-                    onClick = onOpenGuide,
-                    modifier = Modifier.testTag("settings_guide_button"),
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.HelpOutline,
-                        contentDescription = "How Cypher works",
-                        tint = palette.textSecondary,
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        FrostedCircleIconButton(
+                            icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                            contentDescription = "Back to Messages",
+                            onClick = onBackToMessages,
+                            size = 42.dp,
+                            modifier = Modifier.testTag("profile_back_button"),
+                        )
+
+                        Text(
+                            text = "Profile",
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                            color = palette.textPrimary,
+                        )
+
+                        FrostedCircleIconButton(
+                            icon = Icons.Filled.HelpOutline,
+                            contentDescription = "Security & privacy guide",
+                            onClick = onOpenGuide,
+                            size = 42.dp,
+                            modifier = Modifier.testTag("settings_guide_button"),
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    PeerAvatar(
+                        nickname = nickname,
+                        peerIdHex = myPeerIdHex.ifBlank { "self_hero_portrait" },
+                        size = 86.dp,
+                        isOnline = isMeshRunning,
+                        hasGlowRing = true,
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (isEditingNickname) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(horizontal = 32.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(palette.surface1)
+                                    .border(1.dp, palette.accent, RoundedCornerShape(14.dp))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                            ) {
+                                BasicTextField(
+                                    value = draftNickname,
+                                    onValueChange = { draftNickname = it.take(24) },
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.titleMedium.copy(
+                                        color = palette.textPrimary,
+                                    ),
+                                    cursorBrush = SolidColor(palette.accentSecondary),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("nickname_edit_input"),
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    onUpdateNickname(draftNickname)
+                                    isEditingNickname = false
+                                },
+                                modifier = Modifier.testTag("save_nickname_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = "Save name",
+                                    tint = palette.encryptedGreen,
+                                )
+                            }
+                        }
+                    } else {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                text = nickname,
+                                style = MaterialTheme.typography.headlineSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                ),
+                                color = palette.textPrimary,
+                            )
+                            IconButton(
+                                onClick = {
+                                    draftNickname = nickname
+                                    isEditingNickname = true
+                                },
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .testTag("edit_nickname_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Edit,
+                                    contentDescription = "Edit display name",
+                                    tint = palette.accentSecondary,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = if (isMeshRunning) "Online · Direct End-to-End Encrypted" else "Offline Mode",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isMeshRunning) palette.encryptedGreen else palette.textSecondary,
                     )
                 }
             }
         }
 
-        // Cryptographic Identity Hero Card
+        // Security Key & Fingerprint Card
         item(key = "identity_card") {
             Surface(
                 color = palette.surface1,
-                shape = RoundedCornerShape(22.dp),
+                shape = RoundedCornerShape(24.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(22.dp)),
+                    .padding(horizontal = 20.dp)
+                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(24.dp)),
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        PeerAvatar(
-                            nickname = nickname,
-                            peerIdHex = myPeerIdHex,
-                            size = 58.dp,
-                            isOnline = isMeshRunning,
-                            isVerified = true,
-                        )
-
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            if (isEditingNickname) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(palette.canvas)
-                                            .border(1.dp, palette.accent, RoundedCornerShape(10.dp))
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                    ) {
-                                        BasicTextField(
-                                            value = draftNickname,
-                                            onValueChange = { draftNickname = it.take(24) },
-                                            singleLine = true,
-                                            textStyle = MaterialTheme.typography.titleMedium.copy(
-                                                color = palette.textPrimary,
-                                            ),
-                                            cursorBrush = SolidColor(palette.accent),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .testTag("nickname_edit_input"),
-                                        )
-                                    }
-                                    IconButton(
-                                        onClick = {
-                                            onUpdateNickname(draftNickname)
-                                            isEditingNickname = false
-                                        },
-                                        modifier = Modifier.testTag("save_nickname_button"),
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Check,
-                                            contentDescription = "Save nickname",
-                                            tint = palette.encryptedGreen,
-                                        )
-                                    }
-                                }
-                            } else {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Text(
-                                        text = nickname,
-                                        style = MaterialTheme.typography.headlineSmall,
-                                        color = palette.textPrimary,
-                                    )
-                                    IconButton(
-                                        onClick = {
-                                            draftNickname = nickname
-                                            isEditingNickname = true
-                                        },
-                                        modifier = Modifier
-                                            .size(28.dp)
-                                            .testTag("edit_nickname_button"),
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Edit,
-                                            contentDescription = "Edit nickname",
-                                            tint = palette.accent,
-                                            modifier = Modifier.size(16.dp),
-                                        )
-                                    }
-                                }
-                            }
-
+                            Icon(
+                                imageVector = Icons.Filled.Key,
+                                contentDescription = null,
+                                tint = palette.accentSecondary,
+                                modifier = Modifier.size(18.dp),
+                            )
                             Text(
-                                text = PeerIdentity.formatHandle(nickname, myPeerIdHex),
-                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = CypherMonoFontFamily),
-                                color = palette.accent,
+                                text = "Safety Key & Identity",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = palette.textPrimary,
+                            )
+                        }
+                        if (copiedLabel != null) {
+                            Text(
+                                text = "Copied $copiedLabel",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.accentSecondary,
                             )
                         }
                     }
 
-                    // SHA-256 Key Fingerprint Block
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .background(palette.canvas)
-                            .border(1.dp, palette.borderSubtle, RoundedCornerShape(14.dp))
+                            .border(1.dp, palette.borderSubtle, RoundedCornerShape(16.dp))
                             .padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Key,
-                                    contentDescription = null,
-                                    tint = palette.encryptedGreen,
-                                    modifier = Modifier.size(15.dp),
-                                )
-                                Text(
-                                    text = "STATIC NOISE XX SHA-256 FINGERPRINT",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = palette.encryptedGreen,
-                                )
-                            }
-                            if (copiedLabel != null) {
-                                Text(
-                                    text = "Copied $copiedLabel",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = palette.accent,
-                                )
-                            }
-                        }
-
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            fingerprintGrid.forEach { line ->
-                                Text(
-                                    text = line,
-                                    fontFamily = CypherMonoFontFamily,
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 12.5.sp,
-                                    color = palette.textPrimary,
-                                    letterSpacing = 0.8.sp,
-                                )
-                            }
+                        fingerprintGrid.forEach { line ->
+                            Text(
+                                text = line,
+                                fontFamily = CypherMonoFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 12.5.sp,
+                                color = palette.textPrimary,
+                                letterSpacing = 0.8.sp,
+                            )
                         }
                     }
 
@@ -346,12 +357,12 @@ fun ProfileTab(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         OutlinedButton(
-                            onClick = { copyToClipboard("Peer ID", myPeerIdHex) },
+                            onClick = { copyToClipboard("Contact ID", myPeerIdHex) },
                             modifier = Modifier
                                 .weight(1f)
                                 .height(42.dp)
                                 .testTag("copy_peer_id_button"),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(50),
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.ContentCopy,
@@ -360,18 +371,18 @@ fun ProfileTab(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Copy Peer ID",
+                                text = "Copy ID",
                                 style = MaterialTheme.typography.labelLarge,
                             )
                         }
 
                         OutlinedButton(
-                            onClick = { copyToClipboard("Fingerprint", myFingerprintHex) },
+                            onClick = { copyToClipboard("Safety Key", myFingerprintHex) },
                             modifier = Modifier
                                 .weight(1f)
                                 .height(42.dp)
                                 .testTag("copy_fingerprint_button"),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(50),
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Security,
@@ -380,7 +391,7 @@ fun ProfileTab(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Copy SHA-256",
+                                text = "Copy Safety Key",
                                 style = MaterialTheme.typography.labelLarge,
                             )
                         }
@@ -389,14 +400,15 @@ fun ProfileTab(
             }
         }
 
-        // Background Mesh & Battery Optimization Card
+        // Background Delivery & Battery Optimization Card
         item(key = "battery_and_service_card") {
             Surface(
                 color = palette.surface1,
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(24.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(20.dp)),
+                    .padding(horizontal = 20.dp)
+                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(24.dp)),
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp),
@@ -409,17 +421,16 @@ fun ProfileTab(
                         Icon(
                             imageVector = Icons.Filled.Radar,
                             contentDescription = null,
-                            tint = palette.accent,
+                            tint = palette.accentSecondary,
                             modifier = Modifier.size(18.dp),
                         )
                         Text(
-                            text = "Mesh Relay & Background Power",
+                            text = "Instant Background Delivery",
                             style = MaterialTheme.typography.titleMedium,
                             color = palette.textPrimary,
                         )
                     }
 
-                    // Foreground service toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -430,12 +441,12 @@ fun ProfileTab(
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
                             Text(
-                                text = "Persistent Foreground Mesh Relay",
+                                text = "Stay Connected in Background",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = palette.textPrimary,
                             )
                             Text(
-                                text = "Keep Bluetooth LE scanning & multi-hop routing alive when Cypher is minimized.",
+                                text = "Receive messages and voice notes immediately even when the app is minimized.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = palette.textSecondary,
                             )
@@ -452,10 +463,9 @@ fun ProfileTab(
                         )
                     }
 
-                    // Battery Optimization Status & Action
                     Surface(
                         color = if (isBatteryUnrestricted) palette.encryptedGreenSoft else palette.warningAmberSoft,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .border(
@@ -465,7 +475,7 @@ fun ProfileTab(
                                 } else {
                                     palette.warningAmber.copy(alpha = 0.4f)
                                 },
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(16.dp),
                             ),
                     ) {
                         Column(
@@ -489,7 +499,7 @@ fun ProfileTab(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = if (isBatteryUnrestricted) {
-                                            "Battery Optimization Disabled (Unrestricted)"
+                                            "Unrestricted Background Delivery Enabled"
                                         } else {
                                             "Battery Optimization Active"
                                         },
@@ -498,9 +508,9 @@ fun ProfileTab(
                                     )
                                     Text(
                                         text = if (isBatteryUnrestricted) {
-                                            "Cypher is whitelisted from Android Doze throttling for uninterrupted mesh delivery."
+                                            "Messages arrive with zero delay even when your screen is off."
                                         } else {
-                                            "Android may suspend background BLE links. Grant unrestricted battery access for reliable mesh delivery."
+                                            "Allow unrestricted background activity so Android doesn't pause incoming messages."
                                         },
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.textSecondary,
@@ -525,14 +535,14 @@ fun ProfileTab(
                                             .weight(1f)
                                             .height(42.dp)
                                             .testTag("profile_disable_battery_opt_button"),
-                                        shape = RoundedCornerShape(12.dp),
+                                        shape = RoundedCornerShape(50),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = palette.warningAmber,
                                             contentColor = Color(0xFF1F1300),
                                         ),
                                     ) {
                                         Text(
-                                            text = "Disable Optimization",
+                                            text = "Allow Background",
                                             style = MaterialTheme.typography.labelLarge,
                                             fontWeight = FontWeight.Bold,
                                         )
@@ -549,7 +559,7 @@ fun ProfileTab(
                                         modifier = Modifier
                                             .height(42.dp)
                                             .testTag("profile_open_battery_settings_button"),
-                                        shape = RoundedCornerShape(12.dp),
+                                        shape = RoundedCornerShape(50),
                                     ) {
                                         Text(
                                             text = "Settings",
@@ -575,10 +585,11 @@ fun ProfileTab(
         item(key = "appearance_card") {
             Surface(
                 color = palette.surface1,
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(24.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(20.dp)),
+                    .padding(horizontal = 20.dp)
+                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(24.dp)),
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp),
@@ -591,7 +602,7 @@ fun ProfileTab(
                         Icon(
                             imageVector = Icons.Filled.Palette,
                             contentDescription = null,
-                            tint = palette.accent,
+                            tint = palette.accentSecondary,
                             modifier = Modifier.size(18.dp),
                         )
                         Text(
@@ -616,17 +627,17 @@ fun ProfileTab(
                                 label = "theme_border",
                             )
                             val fg by animateColorAsState(
-                                targetValue = if (selected) palette.accent else palette.textSecondary,
+                                targetValue = if (selected) Color.White else palette.textSecondary,
                                 label = "theme_fg",
                             )
                             Surface(
                                 color = bg,
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(50),
                                 modifier = Modifier
                                     .weight(1f)
-                                    .clip(RoundedCornerShape(12.dp))
+                                    .clip(RoundedCornerShape(50))
                                     .clickable { onSetThemePreference(pref) }
-                                    .border(1.dp, border, RoundedCornerShape(12.dp))
+                                    .border(1.dp, border, RoundedCornerShape(50))
                                     .testTag("theme_option_${pref.name.lowercase()}"),
                             ) {
                                 Box(
@@ -646,46 +657,15 @@ fun ProfileTab(
             }
         }
 
-        // Security Stats & Protocol Reference
-        item(key = "security_stats_card") {
-            Surface(
-                color = palette.surface1,
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(20.dp)),
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        text = "Cryptographic Engine",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = palette.textPrimary,
-                    )
-                    Text(
-                        text = "Rust cypher-core v$coreVersion · Noise_XX_25519_ChaChaPoly_SHA256 · Ed25519 Signing · PKCS#7 Block Padding",
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = CypherMonoFontFamily),
-                        color = palette.textSecondary,
-                    )
-                    Text(
-                        text = "$verifiedCount verified peers · $blockedCount blocked peers",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.textMuted,
-                    )
-                }
-            }
-        }
-
-        // Emergency Panic Wipe Card
+        // Reset Account & Clear Data Card
         item(key = "panic_wipe_card") {
             Surface(
                 color = palette.dangerRedSoft,
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(24.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, palette.dangerRed.copy(alpha = 0.4f), RoundedCornerShape(20.dp)),
+                    .padding(horizontal = 20.dp)
+                    .border(1.dp, palette.dangerRed.copy(alpha = 0.4f), RoundedCornerShape(24.dp)),
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp),
@@ -702,13 +682,13 @@ fun ProfileTab(
                             modifier = Modifier.size(20.dp),
                         )
                         Text(
-                            text = "Emergency Panic Wipe",
+                            text = "Reset Identity & Clear Messages",
                             style = MaterialTheme.typography.titleMedium,
                             color = palette.dangerRed,
                         )
                     }
                     Text(
-                        text = "Immediately zeroizes your in-memory Rust Noise XX sessions, destroys your Android Keystore identity seed, deletes all stored messages, and generates a fresh unlinkable node identity.",
+                        text = "Permanently erase all conversations, voice notes, and encryption keys on this device and start fresh ($verifiedCount verified · $blockedCount blocked · v$coreVersion).",
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.textSecondary,
                     )
@@ -718,7 +698,7 @@ fun ProfileTab(
                             .fillMaxWidth()
                             .height(46.dp)
                             .testTag("panic_wipe_button"),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(50),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = palette.dangerRed,
                             contentColor = Color.White,
@@ -731,17 +711,13 @@ fun ProfileTab(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Execute Panic Wipe",
+                            text = "Erase All Data",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
                         )
                     }
                 }
             }
-        }
-
-        item(key = "bottom_spacer") {
-            Spacer(modifier = Modifier.height(84.dp))
         }
     }
 
@@ -753,13 +729,13 @@ fun ProfileTab(
             textContentColor = palette.textSecondary,
             title = {
                 Text(
-                    text = "Destroy Node Identity & Messages?",
+                    text = "Erase All Messages & Keys?",
                     style = MaterialTheme.typography.titleLarge,
                 )
             },
             text = {
                 Text(
-                    text = "This action permanently erases your X25519/Ed25519 keys, verified peer trust records, and all conversation history. It cannot be undone.",
+                    text = "This permanently deletes your conversations, verified contacts, and encryption keys, then generates a brand-new profile.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -775,7 +751,7 @@ fun ProfileTab(
                         contentColor = Color.White,
                     ),
                 ) {
-                    Text("Wipe Everything")
+                    Text("Erase Everything")
                 }
             },
             dismissButton = {

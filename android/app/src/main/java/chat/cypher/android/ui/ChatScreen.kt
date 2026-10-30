@@ -41,6 +41,10 @@ data class ChatMessage(
     val content: String,
     val timestampMs: Long,
     val isOwn: Boolean,
+    /** For echoed DMs: the peer the message is addressed to. */
+    val recipientId: String? = null,
+    /** Delivery confirmation received (DM ack from the peer). */
+    val delivered: Boolean = false,
 )
 
 /** A peer row in the sheet. */
@@ -68,45 +72,82 @@ fun ChatScreen() {
     var selectedPeer by remember { mutableStateOf<PeerRow?>(null) }
     val listState = rememberLazyListState()
 
-    // Subscribe to engine events and fold them into the UI state.
+    // Subscribe to engine events and fold them into the UI state. The bus
+    // fires on binder/pump threads; snapshot state mutates on the UI thread.
     DisposableEffect(Unit) {
+        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
         val unsubscribe = MeshEvents.subscribe { eventsJson ->
-            val events = try {
-                JSONArray(eventsJson)
-            } catch (_: Exception) {
-                return@subscribe
-            }
-            for (i in 0 until events.length()) {
-                val event = events.optJSONObject(i) ?: continue
-                val keys = event.keys()
-                if (!keys.hasNext()) continue
-                val variant = keys.next()
-                val fields = event.optJSONObject(variant) ?: JSONObject()
-                when (variant) {
-                    "PublicMessageReceived" -> {
-                        val message = ChatMessage(
-                            id = fields.optString("message_id"),
-                            sender = fields.optString("nickname"),
-                            senderId = fields.optString("sender"),
-                            content = fields.optString("content"),
-                            timestampMs = fields.optLong("timestamp_ms"),
-                            isOwn = false,
-                        )
-                        MeshUiState.messages = (MeshUiState.messages + message).takeLast(500)
-                    }
+            mainHandler.post {
+                val events = try {
+                    JSONArray(eventsJson)
+                } catch (_: Exception) {
+                    return@post
+                }
+                for (i in 0 until events.length()) {
+                    val event = events.optJSONObject(i) ?: continue
+                    val keys = event.keys()
+                    if (!keys.hasNext()) continue
+                    val variant = keys.next()
+                    val fields = event.optJSONObject(variant) ?: JSONObject()
+                    when (variant) {
+                        "PublicMessageReceived" -> {
+                            val message = ChatMessage(
+                                id = fields.optString("message_id"),
+                                sender = fields.optString("nickname"),
+                                senderId = fields.optString("sender"),
+                                content = fields.optString("content"),
+                                timestampMs = fields.optLong("timestamp_ms"),
+                                isOwn = false,
+                            )
+                            MeshUiState.messages =
+                                (MeshUiState.messages + message).takeLast(500)
+                        }
                     "NoisePayloadReceived" -> {
                         val peer = fields.optString("peer")
-                        // Private messages carry a typed encrypted payload; the
-                        // full UI decodes per type — show a compact preview.
-                        val message = ChatMessage(
-                            id = "noise-${System.nanoTime()}",
-                            sender = "noise:${peer.take(8)}",
-                            senderId = peer,
-                            content = "(encrypted message)",
-                            timestampMs = System.currentTimeMillis(),
-                            isOwn = false,
-                        )
-                        MeshUiState.messages = (MeshUiState.messages + message).takeLast(500)
+                        val payloadType = fields.optInt("payload_type")
+                        val payload = fields.optJSONArray("payload")
+                        when (payloadType) {
+                            0x01 -> {
+                                // privateMessage TLV: 0x00 id, 0x01 content
+                                // (1-byte lengths, UTF-8) — byte-exact with
+                                // the Swift/Rust wire format.
+                                val decoded = decodePrivateMessage(payload)
+                                if (decoded != null) {
+                                    val nickname =
+                                        MeshUiState.peers.firstOrNull { it.peerId == peer }?.nickname
+                                            ?: peer.take(8)
+                                    val message = ChatMessage(
+                                        id = decoded.first,
+                                        sender = nickname,
+                                        senderId = peer,
+                                        content = decoded.second,
+                                        timestampMs = System.currentTimeMillis(),
+                                        isOwn = false,
+                                    )
+                                    MeshUiState.messages =
+                                        (MeshUiState.messages + message).takeLast(500)
+                                }
+                            }
+                            0x02, 0x03 -> {
+                                // Read receipt / delivered ack: mark the
+                                // outbound message delivered.
+                                markDelivered(peer)
+                            }
+                            else -> {
+                                // Voice, files, verification, group payloads —
+                                // surfaced when their UI lands (v0.3).
+                                val message = ChatMessage(
+                                    id = "noise-${System.nanoTime()}",
+                                    sender = "noise:${peer.take(8)}",
+                                    senderId = peer,
+                                    content = "(encrypted payload 0x${Integer.toHexString(payloadType)})",
+                                    timestampMs = System.currentTimeMillis(),
+                                    isOwn = false,
+                                )
+                                MeshUiState.messages =
+                                    (MeshUiState.messages + message).takeLast(500)
+                            }
+                        }
                     }
                     "PeerConnected", "PeerDisconnected", "PeerListUpdated", "SessionEstablished" -> refreshState()
                     "MeshPingResult" -> {
@@ -251,6 +292,7 @@ fun ChatScreen() {
                                     content = text,
                                     timestampMs = System.currentTimeMillis(),
                                     isOwn = true,
+                                    recipientId = selectedPeer?.peerId,
                                 )
                                 ).takeLast(500)
                         }
@@ -304,6 +346,15 @@ private fun MessageRow(message: ChatMessage) {
                     style = CypherTypography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (message.isOwn && message.recipientId != null) {
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        if (message.delivered) "\u2713\u2713 delivered" else "\u2713 sent",
+                        style = CypherTypography.labelSmall,
+                        color = if (message.delivered) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Text(
                 message.content,
@@ -391,5 +442,42 @@ private fun refreshState() {
             )
         }
     } catch (_: Exception) {
+    }
+}
+
+/** Decode a `privateMessage` TLV payload to (messageId, content). */
+private fun decodePrivateMessage(payload: JSONArray?): Pair<String, String>? {
+    if (payload == null || payload.length() == 0) return null
+    var messageId: String? = null
+    var content: String? = null
+    var i = 0
+    val n = payload.length()
+    while (i + 1 < n) {
+        val tag = payload.optInt(i)
+        val length = payload.optInt(i + 1)
+        if (length < 0 || i + 2 + length > n) return null
+        val bytes = ByteArray(length)
+        for (j in 0 until length) {
+            bytes[j] = payload.optInt(i + 2 + j).toByte()
+        }
+        when (tag) {
+            0x00 -> messageId = String(bytes, Charsets.UTF_8)
+            0x01 -> content = String(bytes, Charsets.UTF_8)
+            else -> return null // unknown TLV types reject
+        }
+        i += 2 + length
+    }
+    return if (messageId != null && content != null) messageId to content else null
+}
+
+/** Flip the latest outbound DM to the peer into a delivered state. */
+private fun markDelivered(peer: String) {
+    val index = MeshUiState.messages.indexOfLast {
+        it.isOwn && it.recipientId == peer && !it.delivered
+    }
+    if (index >= 0) {
+        val updated = MeshUiState.messages[index].copy(delivered = true)
+        MeshUiState.messages =
+            MeshUiState.messages.toMutableList().apply { set(index, updated) }
     }
 }

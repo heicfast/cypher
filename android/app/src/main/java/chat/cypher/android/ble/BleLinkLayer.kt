@@ -74,9 +74,23 @@ class BleLinkLayer(private val context: Context) {
     private val bluetoothAdapter: BluetoothAdapter? get() = bluetoothManager.adapter
 
     // ---- identifiers ----------------------------------------------------------
+    //
+    // Central and peripheral (server-side) links live in SEPARATE id
+    // namespaces: two bitchat devices in range normally connect BOTH ways
+    // (each side scans, advertises, and connects). Sharing one id per
+    // address would collapse the two physical channels into one engine
+    // link binding and starve one channel of writes.
+
+    /** Central-role ids: discovered device address -> id (also the link id). */
+    private val peripheralIds = ConcurrentHashMap<String, Long>()
+
+    /** Peripheral-role ids: server link id -> device address. */
+    private val serverLinks = ConcurrentHashMap<Long, String>()
+
+    /** Reverse of [peripheralIds]: central link id -> address. */
+    private val centralLinks = ConcurrentHashMap<Long, String>()
 
     private val linkCounter = AtomicLong(1)
-    private val peripheralIds = ConcurrentHashMap<String, Long>() // device address -> id
 
     /** Central-role connections: link id -> gatt (set once connected). */
     private val gattClients = ConcurrentHashMap<Long, BluetoothGatt>()
@@ -177,7 +191,7 @@ class BleLinkLayer(private val context: Context) {
                 // Server notification.
                 val server = gattServer ?: return dropKey(key)
                 val characteristic = serverCharacteristic ?: return dropKey(key)
-                val address = addressFor(link) ?: return dropKey(key)
+                val address = addressForServerLink(link) ?: return dropKey(key)
                 val device = try {
                     bluetoothAdapter?.getRemoteDevice(address)
                 } catch (_: IllegalArgumentException) {
@@ -298,6 +312,8 @@ class BleLinkLayer(private val context: Context) {
         connecting.values.forEach { it.disconnect() }
         connecting.clear()
         writeCharacteristics.clear()
+        centralLinks.clear()
+        serverLinks.clear()
         synchronized(sendLock) { sendStates.clear() }
         gattServer?.close()
         gattServer = null
@@ -411,7 +427,9 @@ class BleLinkLayer(private val context: Context) {
     // ---- connections (central role) ---------------------------------------------------
 
     private fun addressFor(peripheral: Long): String? =
-        peripheralIds.entries.firstOrNull { it.value == peripheral }?.key
+        centralLinks[peripheral] ?: peripheralIds.entries.firstOrNull { it.value == peripheral }?.key
+
+    private fun addressForServerLink(link: Long): String? = serverLinks[link]
 
     private fun connect(peripheral: Long) {
         val adapter = bluetoothAdapter ?: return
@@ -430,6 +448,7 @@ class BleLinkLayer(private val context: Context) {
                         BluetoothProfile.STATE_CONNECTED -> {
                             connecting[address] = gatt
                             gattClients[peripheral] = gatt
+                            centralLinks[peripheral] = address
                             // Larger MTU first — must happen before any data
                             // transfer (bitchat requests 517 and only then
                             // discovers services).
@@ -438,6 +457,7 @@ class BleLinkLayer(private val context: Context) {
                         BluetoothProfile.STATE_DISCONNECTED -> {
                             connecting.remove(address)
                             gattClients.remove(peripheral)
+                            centralLinks.remove(peripheral)
                             writeCharacteristics.remove(peripheral)
                             dropLinkQueues(peripheral)
                             pushEvent(EVENT_LINK_DOWN, link = peripheral, direction = DIRECTION_CENTRAL)
@@ -565,15 +585,17 @@ class BleLinkLayer(private val context: Context) {
 
     private val serverCallback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            // Link ids for server-side connections are per-address.
-            val id = peripheralIds.computeIfAbsent(device.address) { linkCounter.andIncrement }
             if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                dropLinkQueues(id)
-                pushEvent(EVENT_LINK_DOWN, link = id, direction = DIRECTION_PERIPHERAL)
+                val stale = serverLinks.entries.filter { it.value == device.address }
+                stale.forEach { (id, _) ->
+                    serverLinks.remove(id)
+                    dropLinkQueues(id)
+                    pushEvent(EVENT_LINK_DOWN, link = id, direction = DIRECTION_PERIPHERAL)
+                }
             }
         }
 
-        override fun onMtuChanged(device: BluetoothDevice, mtu: Int, status: Int) {
+        override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
             // The central drove the negotiation; notifications clamp to it
             // automatically. Nothing to track.
         }
@@ -590,8 +612,12 @@ class BleLinkLayer(private val context: Context) {
             if (descriptor.uuid == GattIds.CCCD &&
                 value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
             ) {
-                val id =
-                    peripheralIds.computeIfAbsent(device.address) { linkCounter.andIncrement }
+                // Fresh server-side link id (separate namespace from central
+                // links — the same peer may hold both roles at once).
+                val existing = serverLinks.entries.firstOrNull { it.value == device.address }?.key
+                val id = existing ?: linkCounter.andIncrement.also {
+                    serverLinks[it] = device.address
+                }
                 gattServer?.sendResponse(
                     device,
                     requestId,
@@ -630,8 +656,10 @@ class BleLinkLayer(private val context: Context) {
                 )
             }
             if (characteristic.uuid == GattIds.CHARACTERISTIC) {
-                val id =
-                    peripheralIds.computeIfAbsent(device.address) { linkCounter.andIncrement }
+                val existing = serverLinks.entries.firstOrNull { it.value == device.address }?.key
+                val id = existing ?: linkCounter.andIncrement.also {
+                    serverLinks[it] = device.address
+                }
                 pushEvent(
                     EVENT_BYTES,
                     link = id,
@@ -642,7 +670,7 @@ class BleLinkLayer(private val context: Context) {
         }
 
         override fun onNotificationSent(device: BluetoothDevice, status: Int) {
-            val id = peripheralIds[device.address] ?: return
+            val id = serverLinks.entries.firstOrNull { it.value == device.address }?.key ?: return
             completeSend(serverKey(id), status)
         }
     }

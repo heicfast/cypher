@@ -25,6 +25,12 @@ data class CypherMessage(
     val isOwn: Boolean,
     val kind: MessageKind = MessageKind.TEXT,
     val delivery: Delivery? = if (isOwn) Delivery.SENDING else null,
+    /** Media metadata (kind IMAGE/FILE/VOICE). */
+    val fileName: String? = null,
+    val mimeType: String? = null,
+    /** Local path for received media; null while sending. */
+    val localPath: String? = null,
+    val byteSize: Long = 0L,
 )
 
 enum class ConversationKind { MESH, CHANNEL, DIRECT }

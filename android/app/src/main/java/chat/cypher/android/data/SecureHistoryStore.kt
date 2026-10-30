@@ -89,6 +89,10 @@ class SecureHistoryStore(context: Context) {
         .put("o", isOwn)
         .put("k", kind.name)
         .put("d", delivery?.name ?: JSONObject.NULL)
+        .put("fn", fileName ?: JSONObject.NULL)
+        .put("mt", mimeType ?: JSONObject.NULL)
+        .put("lp", localPath ?: JSONObject.NULL)
+        .put("bs", byteSize)
 
     private fun parseSnapshot(root: JSONObject): Snapshot {
         val messages = ArrayList<CypherMessage>()
@@ -110,6 +114,10 @@ class SecureHistoryStore(context: Context) {
                     delivery = if (deliveryName.isNotEmpty() && deliveryName != "null") {
                         runCatching { Delivery.valueOf(deliveryName) }.getOrNull()
                     } else null,
+                    fileName = o.optString("fn").takeIf { it.isNotEmpty() && it != "null" },
+                    mimeType = o.optString("mt").takeIf { it.isNotEmpty() && it != "null" },
+                    localPath = o.optString("lp").takeIf { it.isNotEmpty() && it != "null" },
+                    byteSize = o.optLong("bs"),
                 )
             )
         }

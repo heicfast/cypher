@@ -1,5 +1,6 @@
 package chat.cypher.android.ui.chats
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +49,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -61,6 +64,7 @@ import chat.cypher.android.ui.components.OnlineDot
 import chat.cypher.android.ui.components.PeerAvatar
 import chat.cypher.android.ui.components.DeliveryTicks
 import chat.cypher.android.ui.theme.LocalCypherPalette
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -90,6 +94,17 @@ fun ConversationScreen(
         mutableStateOf(controller.conversation(conversationId)?.draft ?: "")
     }
     val listState = rememberLazyListState()
+    var viewerImage by remember { mutableStateOf<String?>(null) }
+
+    // Photo picker → media send (bitchat ImagePickerButton parity).
+    val appContext = androidx.compose.ui.platform.LocalContext.current
+    val photoPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            sendImage(appContext, controller, conversationId, uri)
+        }
+    }
 
     // Follow the newest message while pinned at the bottom.
     LaunchedEffect(messages.size, conversationId) {
@@ -210,7 +225,7 @@ fun ConversationScreen(
             ) {
                 val reversed = messages.asReversed()
                 items(reversed, key = { it.id }) { message ->
-                    MessageBubble(message)
+                    MessageBubble(message) { path -> viewerImage = path }
                 }
             }
         }
@@ -228,6 +243,7 @@ fun ConversationScreen(
                     controller.setDraft(conversationId, "")
                 }
             },
+            onAttach = { photoPicker.launch("image/*") },
             hint = when (conversation?.kind) {
                 ConversationKind.MESH -> "Message the mesh…"
                 ConversationKind.CHANNEL -> "Message ${conversation.displayName}…"
@@ -235,12 +251,33 @@ fun ConversationScreen(
             },
         )
     }
+
+    // ---- full-screen image viewer ---------------------------------------------
+    viewerImage?.let { path ->
+        FullScreenImageViewer(path = path, onDismiss = { viewerImage = null })
+    }
+}
+
+/** Read the picked image, then ship it over the mesh. */
+private fun sendImage(
+    context: android.content.Context,
+    controller: MeshController,
+    conversationId: String,
+    uri: android.net.Uri,
+) {
+    try {
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
+        val name = uri.lastPathSegment?.substringAfterLast('/') ?: "image.jpg"
+        val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+        controller.sendMedia(conversationId, name, mime, bytes)
+    } catch (_: Exception) {
+    }
 }
 
 // ---- bubbles ----------------------------------------------------------------------
 
 @Composable
-private fun MessageBubble(message: CypherMessage) {
+private fun MessageBubble(message: CypherMessage, onImageClick: (String) -> Unit) {
     val palette = LocalCypherPalette.current
 
     if (message.kind == MessageKind.SYSTEM) {
@@ -278,12 +315,17 @@ private fun MessageBubble(message: CypherMessage) {
                     .padding(horizontal = 14.dp, vertical = 9.dp)
             ) {
                 Column {
-                    Text(
-                        message.content,
-                        color = if (message.isOwn) palette.bubbleSentText else palette.bubbleReceivedText,
-                        fontSize = 15.5.sp,
-                        lineHeight = 21.sp,
-                    )
+                    when (message.kind) {
+                        MessageKind.IMAGE -> ImageBubble(message, onImageClick)
+                        MessageKind.FILE -> FileBubble(message)
+                        MessageKind.VOICE -> FileBubble(message, voice = true)
+                        else -> Text(
+                            message.content,
+                            color = if (message.isOwn) palette.bubbleSentText else palette.bubbleReceivedText,
+                            fontSize = 15.5.sp,
+                            lineHeight = 21.sp,
+                        )
+                    }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -304,6 +346,117 @@ private fun MessageBubble(message: CypherMessage) {
     }
 }
 
+/** Photo bubble — decodes the received image, tap for the full-screen viewer. */
+@Composable
+private fun ImageBubble(message: CypherMessage, onImageClick: (String) -> Unit) {
+    val path = message.localPath
+    val bitmap = remember(path) {
+        path?.let {
+            runCatching {
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 }
+                android.graphics.BitmapFactory.decodeFile(it, opts)
+            }.getOrNull()
+        }
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = message.fileName,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .width(230.dp)
+                .height(165.dp)
+                .background(
+                    Color.Transparent,
+                    RoundedCornerShape(16.dp),
+                )
+                .clickable { path?.let(onImageClick) },
+        )
+    } else {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("🖼️", fontSize = 22.sp)
+            Text(
+                if (message.isOwn) message.content else "📷 image · tap when received",
+                color = if (message.isOwn) Color.White.copy(alpha = 0.85f) else Color(0xFF111827),
+                fontSize = 14.sp,
+            )
+        }
+    }
+}
+
+/** File/voice card — icon, name, size (bitchat FileMessageItem parity). */
+@Composable
+private fun FileBubble(message: CypherMessage, voice: Boolean = false) {
+    val emoji = when {
+        voice -> "🎤"
+        message.mimeType?.startsWith("audio/") == true -> "🎤"
+        else -> "📎"
+    }
+    val tint = if (message.isOwn) Color.White.copy(alpha = 0.9f) else Color(0xFF111827)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.widthIn(min = 180.dp),
+    ) {
+        Text(emoji, fontSize = 24.sp)
+        Column {
+            Text(
+                message.fileName ?: message.content,
+                color = tint,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 190.dp),
+            )
+            Text(
+                formatBytes(message.byteSize),
+                color = tint.copy(alpha = 0.7f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1_048_576 -> "%.1f MB" .format(bytes / 1_048_576.0)
+    bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+    bytes > 0 -> "$bytes B"
+    else -> ""
+}
+
+/** Full-screen photo viewer (bitchat FullScreenImageViewer parity). */
+@Composable
+private fun FullScreenImageViewer(path: String, onDismiss: () -> Unit) {
+    val bitmap = remember(path) {
+        runCatching { android.graphics.BitmapFactory.decodeFile(path) }.getOrNull()
+    }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Text("Image unavailable", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
+            }
+        }
+    }
+}
+
 private fun bubbleTime(ms: Long): String =
     SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(ms))
 
@@ -314,6 +467,7 @@ private fun Composer(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: (String) -> Unit,
+    onAttach: () -> Unit,
     hint: String,
 ) {
     val palette = LocalCypherPalette.current
@@ -328,14 +482,15 @@ private fun Composer(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // + button
+            // + button (photo attach)
             Box(
                 Modifier
                     .size(38.dp)
-                    .background(palette.surfaceSearch, CircleShape),
+                    .background(palette.surfaceSearch, CircleShape)
+                    .clickable(onClick = onAttach),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.Add, "Attach", tint = palette.textSecondary, modifier = Modifier.size(19.dp))
+                Icon(Icons.Filled.Add, "Attach photo", tint = palette.textSecondary, modifier = Modifier.size(19.dp))
             }
             // capsule input
             Row(

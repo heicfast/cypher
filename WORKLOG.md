@@ -266,3 +266,65 @@ runners).
   the process.
 - .so rebuilt for all 4 ABIs, checksum manifest regenerated, JNI symbol
   gate green.
+
+## Session 4 — Core v0.3 feature surface + full premium UI rebuild (e2c49f5)
+
+### Core parity round (deep audit vs bitchat iOS, P0/P1 gaps closed)
+- **Deep audit** (3 agents, line-by-line vs bitchat + bitchat-android) found the
+  feature-layer gaps; all P0s fixed this round:
+- `send_typed_noise_payload` — arbitrary typed Noise payloads with
+  queue-until-handshake (the Swift `sendNoisePayload` equivalent). Unblocks
+  receipts, ACKs, group payloads, private voice, private files.
+- Read receipts (0x02) + delivery ACKs (0x03) — wire-exact, both directions now.
+- `set_nickname` force-broadcasts an announce (was throttle-gated; parity with
+  Swift `setNickname`). JNI: `nativeSetNickname`.
+- Files: `send_file_broadcast` (signed, v2-framed by the fragmenter) +
+  `send_file_private` (0x20 with admission gate: blocked peers and peers
+  without a secure session are refused). JNI both.
+- Voice PTT: `send_voice_burst` (public signed 0x29 + private 0x08). JNI.
+- Groups: `GroupMessageReceived` now carries sender + payload (UI can decrypt).
+- LEAVE: `stop_services` broadcasts a signed leave before stopping the radios.
+- 0x21 `AuthenticatedPeerState`: exact TLV port from `Packets.swift`, exchanged
+  on every session establishment; inbound pins capabilities + signing keys.
+- Peer flags: favorite/verified/blocklist + engine-level courier-deposit and
+  private-media gating (bitchat drops blocked deposits + private media).
+- Announce cadence `recentTraffic` (5 s window) — was hardcoded false.
+- Gossip: announces sync in the publicMessages class; periodic rounds unicast
+  to EVERY connected peer (was first-only); initial sync 1 s (was 5 s).
+- Courier: `remove_expired` sweep in maintenance; spray to courier-tier peers
+  on session establishment (signed envelopes, remaining-copy budget).
+- `FileTransferReceived.is_private` — private media now lands in the DM thread.
+- JNI: 22 exports (was 10). `stateJson` enriched (favorite, lastSeenMs,
+  noisePublicKey, signingPublicKey, blocked list).
+- Tests: 245 green (7 new mesh-level: receipts round-trip, private file
+  delivery, public voice, block gating, nickname announce, leave, + 3 codec).
+
+### Full UI rebuild (premium messaging design, VLM-verified)
+- **Design pipeline**: VLM-extracted the design tokens from the reference
+  mockup → HTML hi-fi mockup → Playwright screenshot → 2 VLM comparison
+  rounds (85 → 92/100, bottom-nav active style verified against a zoomed
+  crop) → tokens locked: canvas #EFF3F8, white surfaces, #3B82F6 accents,
+  green presence, tailless 20 dp bubbles, filled+outline nav icons.
+- **CypherPalette/Theme/Typography**: clean sans (the terminal-mono look is
+  gone), light + dark schemes, peer colors (djb2 hue math unchanged).
+- **MeshController**: the single source of truth — folds every engine event,
+  drives receipts/ACKs, persists via MeshStore, posts DM notifications.
+- **MeshStore**: JSONL conversations (500/convo cap) + prefs (anon####
+  nickname, favorites, blocklist, read-state) — history survives restarts.
+- **Onboarding**: bitchat-parity state machine with verbatim copy
+  (permission explanation → requesting → BT → location → battery →
+  initializing → complete).
+- **AppScaffold**: bottom nav Chats · Contacts · Calls · Profile.
+- **Chats tab**: title, search, online-peer strip (accent rings + presence
+  dots), #mesh row, DM rows (unread badges, ✓✓ ticks, relative times).
+- **Conversation**: bubbles with tail corner, day dividers, sender avatars
+  in #mesh, image/file/voice bubbles, long-press actions, attach + send.
+- **Contacts**: nearby peers, verified/favorite badges, detail sheet with
+  fingerprint blocks + favorite/verify/block.
+- **Calls**: voice-message history with inline playback.
+- **Profile**: identity card, nickname edit, fingerprint, theme chips,
+  network status, blocked list, panic wipe (identity+history+prefs, engine
+  re-arm via pushRadioState, fresh anon identity).
+- Infra: Bluetooth adapter-state receiver; FGS notification with live peer
+  count; DM notification channel; engine restart uses persisted nickname.
+- First full `assembleDebug` with the new UI: BUILD SUCCESSFUL (24.1 MB).

@@ -593,7 +593,12 @@ fn private_file_transfer_delivers_file_event() {
         .collect();
     assert_eq!(files.len(), 1, "bob should receive exactly one file event");
     match files[0] {
-        EngineEvent::FileTransferReceived { sender, file } => {
+        EngineEvent::FileTransferReceived {
+            sender,
+            file,
+            is_private,
+        } => {
+            assert!(is_private, "typed 0x20 files must be marked private");
             assert_eq!(*sender, world.alice.engine.local_peer_id());
             assert_eq!(file.file_name, "photo.png");
             assert_eq!(file.mime_type, "image/png");

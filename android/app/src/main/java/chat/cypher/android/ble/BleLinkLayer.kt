@@ -69,6 +69,14 @@ private const val GATT_CLOSE_DELAY_MS = 500L
 @SuppressLint("MissingPermission")
 class BleLinkLayer(private val context: Context) {
 
+    companion object {
+        /** The live radio layer — lets the controller re-arm the engine
+         *  after a panic wipe recreates it with a fresh identity. */
+        @Volatile
+        var active: BleLinkLayer? = null
+            private set
+    }
+
     private val bluetoothManager =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? get() = bluetoothManager.adapter
@@ -293,6 +301,7 @@ class BleLinkLayer(private val context: Context) {
     // ---- lifecycle --------------------------------------------------------------
 
     fun start() {
+        active = this
         val adapter = bluetoothAdapter ?: return
         if (!adapter.isEnabled) {
             // The engine reacts to the state event; the UI prompts the user.
@@ -304,7 +313,22 @@ class BleLinkLayer(private val context: Context) {
         startScan(allowDuplicates = true)
     }
 
+    /**
+     * Push a radio-state transition to the engine (0 unknown, 1 resetting,
+     * 2 unsupported, 3 unauthorized, 4 poweredOff, 5 poweredOn) — used by
+     * the adapter-state receiver when the user toggles Bluetooth at runtime.
+     */
+    fun pushRadioState(state: Long) {
+        pushEvent(EVENT_RADIO_STATE, argInt = state)
+        if (state == 5L) {
+            // Adapter came back: reopen the GATT server and rescan.
+            openGattServer()
+            startScan(allowDuplicates = true)
+        }
+    }
+
     fun stop() {
+        active = null
         stopScanInternal()
         stopAdvertisingInternal()
         gattClients.values.forEach { it.disconnect() }

@@ -12,4 +12,7 @@
     <!-- Direct message notifications -->
     <string name="dm_channel_name">Messages</string>
     <string name="dm_channel_description">Private message alerts</string>
+    <string name="dm_notification_sent_image">📷 sent an image</string>
+    <string name="dm_notification_sent_voice">🎤 sent a voice message</string>
+    <string name="dm_notification_sent_file">📎 sent a file</string>
 </resources>

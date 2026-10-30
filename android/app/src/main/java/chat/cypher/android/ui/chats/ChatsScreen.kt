@@ -318,6 +318,12 @@ private fun buildPreview(conversation: Conversation): Preview {
             )
         last == null -> Preview("Say hello 👋")
         last.kind == chat.cypher.android.data.MessageKind.SYSTEM -> Preview(last.content)
+        last.kind == chat.cypher.android.data.MessageKind.IMAGE ->
+            Preview(if (last.isOwn) "📷 You sent a photo" else "📷 Photo")
+        last.kind == chat.cypher.android.data.MessageKind.VOICE ->
+            Preview(if (last.isOwn) "🎤 You sent a voice note" else "🎤 Voice message")
+        last.kind == chat.cypher.android.data.MessageKind.FILE ->
+            Preview(if (last.isOwn) "📎 ${last.fileName ?: "File"}" else "📎 ${last.fileName ?: "File"}")
         last.isOwn -> Preview("You: ${last.content}")
         else -> Preview(last.content)
     }

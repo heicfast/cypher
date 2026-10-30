@@ -10,8 +10,10 @@ import androidx.compose.runtime.setValue
 import chat.cypher.android.ble.MeshEvents
 import chat.cypher.android.core.MeshRuntime
 import chat.cypher.android.notify.Notifier
+import chat.cypher.android.R
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.UUID
 
 /**
@@ -382,9 +384,13 @@ class MeshController private constructor(context: Context) {
                     peersChanged = true
                     scheduleStateRefresh()
                 }
-                "MeshPingResult", "FileTransferReceived", "BoardPayloadReceived",
+                "MeshPingResult", "BoardPayloadReceived",
                 "PublicVoiceFrameReceived", "GroupMessageReceived", "CourierEnvelopeOpened" -> {
                     // surfaced when their feature UI lands (v0.5)
+                }
+                "FileTransferReceived" -> {
+                    foldFileTransfer(f)
+                    conversationChanged = true
                 }
             }
         }
@@ -466,6 +472,121 @@ class MeshController private constructor(context: Context) {
         var end = bytes.size
         while (end > 0 && bytes[end - 1] == 0.toByte()) end--
         return String(bytes, 0, end, Charsets.UTF_8).takeIf { it.isNotEmpty() }
+    }
+
+    // ---- media transfer (bitchat file pipeline parity) --------------------------
+
+    /** 10 MB file cap — same as bitchat's `MAX_FILE_SIZE_BYTES`. */
+    private val maxMediaBytes = 10L * 1024 * 1024
+
+    /**
+     * Send an image/file/voice note. `peerId == null` broadcasts on the mesh
+     * timeline; otherwise it rides the private Noise session.
+     */
+    fun sendMedia(conversationId: String, fileName: String, mimeType: String, bytes: ByteArray): String? {
+        if (bytes.size > maxMediaBytes) return null
+        val h = handle() ?: return null
+        val transferId = UUID.randomUUID().toString()
+        val kind = when {
+            mimeType.startsWith("image/") -> MessageKind.IMAGE
+            mimeType.startsWith("audio/") -> MessageKind.VOICE
+            else -> MessageKind.FILE
+        }
+        val peerId = conversationId.takeIf { it.startsWith("dm:") }?.removePrefix("dm:")
+        try {
+            if (peerId == null) {
+                emitOutput(
+                    chat.cypher.android.core.CypherBridge.nativeSendFileBroadcast(
+                        h, fileName, mimeType, bytes
+                    )
+                )
+            } else {
+                emitOutput(
+                    chat.cypher.android.core.CypherBridge.nativeSendFilePrivate(
+                        h, peerId, fileName, mimeType, bytes, transferId
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "sendMedia failed", e)
+            return null
+        }
+        appendMessage(
+            CypherMessage(
+                id = transferId,
+                conversationId = conversationId,
+                senderId = identity.peerId,
+                senderNickname = identity.nickname,
+                content = fileName,
+                timestampMs = System.currentTimeMillis(),
+                isOwn = true,
+                kind = kind,
+                delivery = Delivery.SENDING,
+                fileName = fileName,
+                mimeType = mimeType,
+                byteSize = bytes.size.toLong(),
+            ),
+            markRead = true,
+        )
+        return transferId
+    }
+
+    private fun foldFileTransfer(event: JSONObject) {
+        val sender = event.optString("sender")
+        val file = event.optJSONObject("file") ?: return
+        val name = file.optString("file_name")
+        val mime = file.optString("mime_type")
+        val size = file.optLong("file_size")
+        val content = file.optJSONArray("content")?.let { arr ->
+            ByteArray(arr.length()) { i -> arr.optInt(i).toByte() }
+        } ?: return
+
+        val incomingDir = File(appContext.filesDir, "incoming").apply { mkdirs() }
+        val safeName = name.replace(Regex("[/\\\\]"), "_")
+        val target = File(incomingDir, "${System.currentTimeMillis()}_$safeName")
+        try {
+            target.writeBytes(content)
+        } catch (e: Exception) {
+            Log.e(TAG, "media write failed", e)
+            return
+        }
+
+        val kind = when {
+            mime.startsWith("image/") -> MessageKind.IMAGE
+            mime.startsWith("audio/") -> MessageKind.VOICE
+            else -> MessageKind.FILE
+        }
+        val senderPeer = peers.firstOrNull { it.peerId == sender }
+        val isPrivate = event.optBoolean("is_private")
+        val conversationId = if (isPrivate) "dm:$sender" else MESH_CONVERSATION
+        appendMessage(
+            CypherMessage(
+                id = UUID.randomUUID().toString(),
+                conversationId = conversationId,
+                senderId = sender,
+                senderNickname = senderPeer?.nickname ?: sender.take(8),
+                content = name,
+                timestampMs = System.currentTimeMillis(),
+                isOwn = false,
+                kind = kind,
+                fileName = name,
+                mimeType = mime,
+                localPath = target.absolutePath,
+                byteSize = size,
+            ),
+            markRead = focusedConversation == conversationId,
+        )
+        if (isPrivate && focusedConversation != conversationId) {
+            val preview = appContext.getString(
+                when (kind) {
+                    MessageKind.IMAGE -> R.string.dm_notification_sent_image
+                    MessageKind.VOICE -> R.string.dm_notification_sent_voice
+                    else -> R.string.dm_notification_sent_file
+                }
+            )
+            notifier.notifyDm(sender, senderPeer?.nickname ?: sender.take(8), preview)
+            unread[conversationId] = (unread[conversationId] ?: 0) + 1
+        }
     }
 
     private fun markPeerMessagesRead(peerId: String) {

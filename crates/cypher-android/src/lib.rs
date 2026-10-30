@@ -42,7 +42,24 @@ fn with_engine<R>(handle: jlong, f: impl FnOnce(&mut EngineHolder) -> R) -> Opti
     let map = engines().lock().ok()?;
     let holder = map.get(&(handle as u64))?;
     let mut guard = holder.lock().ok()?;
-    Some(f(&mut guard))
+    // A Rust panic must never unwind across the `extern "system"` JNI
+    // boundary (undefined behavior). The engine is panic-free on every
+    // input path (all Results, checked indexing) — this is the last line
+    // of defense: a poisoned engine returns nulls instead of killing the
+    // process. Mutex poisoning is handled above via `.ok()`.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut guard)));
+    match result {
+        Ok(value) => Some(value),
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".into());
+            log::error!("engine call panicked: {message}");
+            None
+        }
+    }
 }
 
 /// Serialize an engine output into the framed response blob.

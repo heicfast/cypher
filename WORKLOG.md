@@ -245,3 +245,24 @@ checksum manifest regenerated and passing. Maven Central rate-limits the
 sandbox IP again (429) — local APK build attempted through the Gradle
 Plugin Portal mirror; the authoritative build check is CI (GitHub
 runners).
+
+### Session 3 follow-ups (same day, commits 04083ba + dc55573 + JNI hardening)
+- CI caught the first real Kotlin error of the port: the GATT *server*
+  `onMtuChanged(device, mtu)` takes no status parameter (unlike the client
+  callback) — fixed.
+- Dual-role link namespaces: two bitchat devices in range connect BOTH
+  ways; sharing one link id per address collapsed the two physical
+  channels into one engine binding. Central ids keep the
+  peripheral-id-as-link-id contract; server links get their own namespace
+  + reverse maps.
+- ChatScreen: private DMs decode the privateMessage TLV byte-exactly
+  (0x00 id / 0x01 content) and render; delivered/read receipts mark the
+  outbound DM; event folding runs on the main looper; fixed a brace loss
+  from the handler refactor (would have failed compile + leaked the
+  subscription).
+- JNI boundary hardening: `with_engine` wraps the engine call in
+  `catch_unwind` — a panic can never unwind across `extern "system"`
+  (UB); a poisoned engine degrades to null responses instead of killing
+  the process.
+- .so rebuilt for all 4 ABIs, checksum manifest regenerated, JNI symbol
+  gate green.

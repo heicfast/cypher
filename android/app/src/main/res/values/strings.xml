@@ -1,8 +1,110 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Cypher</string>
+
+    <!-- Mesh foreground service -->
     <string name="mesh_channel_name">Mesh service</string>
     <string name="mesh_channel_description">Keeps the Bluetooth mesh connected</string>
     <string name="mesh_notification_title">Cypher mesh active</string>
     <string name="mesh_notification_text">Relaying encrypted mesh messages</string>
+    <string name="mesh_notification_peers">Mesh running — %1$d peers</string>
+
+    <!-- Direct message notifications -->
+    <string name="dm_channel_name">Direct Messages</string>
+    <string name="dm_channel_description">Private messages from other Cypher users</string>
+    <string name="dm_notification_title">New private message</string>
+    <string name="dm_notification_body">Open Cypher to view it</string>
+    <string name="dm_notification_sent_image">📷 sent an image</string>
+    <string name="dm_notification_sent_voice">🎤 sent a voice message</string>
+    <string name="dm_notification_sent_file">📎 sent a file</string>
+
+    <!-- Onboarding (bitchat-parity copy) -->
+    <string name="onboarding_tagline">Bluetooth mesh, end to end</string>
+    <string name="privacy_protected">Your Privacy is Protected</string>
+    <string name="permissions_header">Permissions</string>
+    <string name="grant_permissions">Grant Permissions</string>
+    <string name="perm_nearby_devices">Nearby Devices</string>
+    <string name="perm_nearby_devices_desc">Required to discover Cypher users via Bluetooth</string>
+    <string name="perm_location">Precise Location</string>
+    <string name="perm_location_desc">Required by Android to discover nearby devices via Bluetooth</string>
+    <string name="perm_notifications">Notifications</string>
+    <string name="perm_notifications_desc">Receive notifications when you receive private messages</string>
+    <string name="perm_battery">Battery Optimization</string>
+    <string name="perm_battery_desc">Disable to keep mesh connections reliable in the background</string>
+    <string name="bluetooth_recommended">Bluetooth Recommended</string>
+    <string name="enable_bluetooth">Enable Bluetooth</string>
+    <string name="skip">Skip</string>
+    <string name="skip_for_now">Skip for Now</string>
+    <string name="location_services_required">Location Services Required</string>
+    <string name="privacy_first">Privacy First</string>
+    <string name="open_location_settings">Open Location Settings</string>
+    <string name="check_again">Check Again</string>
+    <string name="battery_optimization_detected">Battery optimization detected</string>
+    <string name="benefits_of_disabling">Benefits of Disabling</string>
+    <string name="disable_battery_optimization">Disable Battery Optimization</string>
+    <string name="initializing_mesh_network">Initializing mesh network…</string>
+    <string name="setting_up_bluetooth">Setting up Bluetooth mesh networking…</string>
+    <string name="should_take_seconds">This should only take a few seconds</string>
+    <string name="setup_not_complete">Setup Not Complete</string>
+    <string name="try_again">Try Again</string>
+
+    <!-- Chats -->
+    <string name="chats_title">Chats</string>
+    <string name="search_chats">Search chats</string>
+    <string name="conversations">Conversations</string>
+    <string name="no_conversations_yet">Private conversations will appear here</string>
+    <string name="mesh_channel_label">#mesh</string>
+    <string name="public_mesh_broadcast">Public mesh broadcast</string>
+    <string name="nobody_around">Nobody around…</string>
+    <string name="you_on_mesh">You\'re on #mesh — messages reach everyone within Bluetooth range</string>
+
+    <!-- Conversation -->
+    <string name="type_a_message">Type a message</string>
+    <string name="message_mesh">Message #mesh</string>
+    <string name="online">Online</string>
+    <string name="end_to_end_encrypted">end-to-end encrypted</string>
+    <string name="peers_nearby">%1$d peers nearby</string>
+    <string name="offline_queue">Offline · messages will queue</string>
+    <string name="today">Today</string>
+    <string name="yesterday">Yesterday</string>
+    <string name="say_hello">No messages yet — say hello</string>
+    <string name="copy_message">Copy message</string>
+    <string name="cancel">Cancel</string>
+    <string name="block">Block %1$s</string>
+
+    <!-- Contacts -->
+    <string name="contacts_title">Contacts</string>
+    <string name="people_nearby">PEOPLE NEARBY</string>
+    <string name="their_fingerprint">Their fingerprint</string>
+    <string name="your_fingerprint">Your fingerprint</string>
+    <string name="compare_fingerprints">Compare these fingerprints with %1$s using a secure channel.</string>
+    <string name="mark_verified">Mark as verified</string>
+    <string name="remove_verification">Remove verification</string>
+    <string name="add_to_favorites">Add to favorites</string>
+    <string name="remove_from_favorites">Remove from favorites</string>
+    <string name="message_user">Message %1$s</string>
+    <string name="blocked_label">BLOCKED</string>
+
+    <!-- Calls -->
+    <string name="calls_title">Calls</string>
+    <string name="no_calls_yet">No calls yet</string>
+    <string name="calls_empty_hint">Voice messages you send and receive will appear here.</string>
+
+    <!-- Profile -->
+    <string name="profile_title">Profile</string>
+    <string name="nickname">Nickname</string>
+    <string name="nickname_hint">Seen by peers nearby</string>
+    <string name="save">Save</string>
+    <string name="network_section">Network</string>
+    <string name="appearance_section">Appearance</string>
+    <string name="privacy_section">Privacy &amp; Security</string>
+    <string name="danger_section">Danger Zone</string>
+    <string name="panic_wipe">Panic wipe</string>
+    <string name="panic_wipe_desc">Erase identity, keys, messages and settings</string>
+    <string name="panic_confirm_title">Wipe all data?</string>
+    <string name="panic_confirm_body">This permanently deletes your identity, keys, messages, and media on this device and creates a new identity. It can\'t be undone.</string>
+    <string name="wipe">Wipe</string>
+    <string name="wiped_title">All data wiped</string>
+    <string name="wiped_body">A new identity was created.</string>
+    <string name="about_footer">Open Source • Privacy First • Decentralized</string>
 </resources>

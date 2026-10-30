@@ -6,16 +6,11 @@ import chat.cypher.android.core.PeerIdentity
 import kotlin.math.abs
 
 /**
- * Theme-specific chroma applied after a peer's stable hue is derived.
+ * Chroma applied after a peer's stable hue is derived.
  *
- * Hue stays identity-stable across themes (and byte-identical to iOS). Only saturation
- * and value change so peer labels remain readable on each background.
- *
- * Guidelines when adding a future theme:
- * - Dim / dark backgrounds: keep [value] high so colors are not lost against the surface;
- *   prefer muted [saturation] over neon.
- * - Light backgrounds: keep [value] moderate-low so colors are not blinding; avoid
- *   near-full saturation.
+ * The djb2 hash + orange-avoidance hue math are byte-identical to the
+ * bitchat iOS implementation — only the saturation/value styling differs
+ * for the premium light design (vivid avatar fills, deeper text tones).
  */
 @Immutable
 data class PeerColorStyle(
@@ -23,21 +18,19 @@ data class PeerColorStyle(
     val value: Float,
 ) {
     companion object {
-        /** Soft pastels that stay bright enough on near-black chat surfaces. */
-        val Dark = PeerColorStyle(saturation = 0.55f, value = 0.82f)
+        /** Vivid fills for avatar circles (works on light + dark canvases). */
+        val Avatar = PeerColorStyle(saturation = 0.62f, value = 0.86f)
 
-        /** Deeper, less saturated tones that stay readable on near-white surfaces. */
-        val Light = PeerColorStyle(saturation = 0.70f, value = 0.42f)
+        /** Deep tones for peer-name text on light surfaces. */
+        val TextLight = PeerColorStyle(saturation = 0.72f, value = 0.48f)
+
+        /** Brighter tones for peer-name text on dark surfaces. */
+        val TextDark = PeerColorStyle(saturation = 0.58f, value = 0.80f)
     }
 }
 
-/**
- * The single identity-to-color boundary used by chat, people sheets, and mentions.
- *
- * The djb2 hash and hue adjustment are byte-identical to the iOS implementation. Orange is
- * avoided because it is reserved for the current user.
- */
-fun colorForPeer(identity: PeerIdentity, palette: BitchatPalette): Color {
+/** The single identity-to-color boundary used across the whole UI. */
+fun peerColor(identity: PeerIdentity, style: PeerColorStyle): Color {
     var hash = 5381UL
     for (byte in identity.stableKey.toByteArray()) {
         hash = ((hash shl 5) + hash) + byte.toUByte().toULong()
@@ -49,10 +42,16 @@ fun colorForPeer(identity: PeerIdentity, palette: BitchatPalette): Color {
         hue = (hue + 0.12) % 1.0
     }
 
-    val style = palette.peerColors
     return Color.hsv(
         hue = (hue * 360).toFloat(),
         saturation = style.saturation,
-        value = style.value
+        value = style.value,
     )
 }
+
+/** Avatar fill color for a peer identity. */
+fun peerAvatarColor(identity: PeerIdentity): Color = peerColor(identity, PeerColorStyle.Avatar)
+
+/** Text color for a peer display name. */
+fun peerTextColor(identity: PeerIdentity, isDark: Boolean): Color =
+    peerColor(identity, if (isDark) PeerColorStyle.TextDark else PeerColorStyle.TextLight)

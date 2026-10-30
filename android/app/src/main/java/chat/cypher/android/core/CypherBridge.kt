@@ -62,6 +62,68 @@ object CypherBridge {
 
     external fun nativeAnnounce(handle: Long): ByteArray?
 
+    /** Change the nickname and force-broadcast an announce. */
+    external fun nativeSetNickname(handle: Long, nickname: String): ByteArray?
+
+    /** Send an arbitrary typed Noise payload (receipts, ACKs, voice, …). */
+    external fun nativeSendTypedNoisePayload(
+        handle: Long,
+        peerHex: String,
+        payloadType: Int,
+        body: ByteArray,
+    ): ByteArray?
+
+    /** Read receipt for a private message we have seen (0x02). */
+    external fun nativeSendReadReceipt(handle: Long, peerHex: String, messageId: String): ByteArray?
+
+    /** Delivery ACK for a received private message (0x03). */
+    external fun nativeSendDeliveryAck(handle: Long, peerHex: String, messageId: String): ByteArray?
+
+    /** Broadcast a file to the mesh (signed fileTransfer packet). */
+    external fun nativeSendFileBroadcast(
+        handle: Long,
+        fileName: String,
+        mimeType: String,
+        content: ByteArray,
+    ): ByteArray?
+
+    /** Send a file privately over Noise (0x20 typed payload). */
+    external fun nativeSendFilePrivate(
+        handle: Long,
+        peerHex: String,
+        fileName: String,
+        mimeType: String,
+        content: ByteArray,
+        transferId: String,
+    ): ByteArray?
+
+    /**
+     * Send a push-to-talk voice burst. Empty `peerHex` broadcasts (0x29);
+     * otherwise the burst goes privately (0x08 Noise payload).
+     */
+    external fun nativeSendVoiceBurst(
+        handle: Long,
+        peerHex: String,
+        burstId: ByteArray,
+        seq: Int,
+        flags: Int,
+        payload: ByteArray,
+    ): ByteArray?
+
+    /** Mark a peer favorite (courier tiers + UI). */
+    external fun nativeSetPeerFavorite(handle: Long, peerHex: String, favorite: Boolean)
+
+    /** Mark a peer verified (fingerprint confirmation). */
+    external fun nativeSetPeerVerified(handle: Long, peerHex: String, verified: Boolean)
+
+    /** Block a peer (courier deposits + private media refused). */
+    external fun nativeBlockPeer(handle: Long, peerHex: String)
+
+    external fun nativeUnblockPeer(handle: Long, peerHex: String)
+
+    /** Stop mesh services: signed LEAVE broadcast + stop radios. */
+    external fun nativeStopServices(handle: Long): ByteArray?
+
     /** JSON snapshot: local identity + peers (for the UI). */
     external fun nativeStateJson(handle: Long): ByteArray?
 

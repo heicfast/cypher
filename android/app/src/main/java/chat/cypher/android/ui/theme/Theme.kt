@@ -1,116 +1,195 @@
 package chat.cypher.android.ui.theme
 
 import android.app.Activity
-import android.os.Build
-import android.view.View
-import android.view.WindowInsetsController
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
-// Standard UI semantics live in Material so stock components and custom Bitchat composables
-// share one source of truth. LocalBitchatPalette below only supplies app-specific extra colors.
-internal val DarkBitchatColorScheme = darkColorScheme(
-    primary = Color(0xFF32D74B),
-    onPrimary = Color.Black,
-    primaryContainer = Color(0xFF163D1D),
-    onPrimaryContainer = Color(0xFFB8F5C1),
-    secondary = Color(0xFF0A84FF),
-    onSecondary = Color.Black,
-    secondaryContainer = Color(0xFF082E54),
-    onSecondaryContainer = Color(0xFFC2E0FF),
-    tertiary = DarkBitchatPalette.accentOrange,
-    onTertiary = Color.Black,
-    background = Color(0xFF000000),
-    onBackground = Color(0xFFF5F5F5),
-    surface = Color(0xFF0E150E),
-    onSurface = Color(0xFFF5F5F5),
-    surfaceVariant = Color(0xFF182118),
-    onSurfaceVariant = Color(0xFF9AA69A),
-    outline = Color(0xFF2A3A2A),
-    outlineVariant = Color(0xFF1C271C),
-    error = Color(0xFFFF453A),
-    onError = Color.Black
+/**
+ * Cypher premium design system — verified against the reference mockup:
+ * cool light-blue canvas, white surfaces, saturated blue accents, tailless
+ * bubbles, green presence.
+ */
+object CypherPalette {
+    // Brand
+    val Blue = Color(0xFF3B82F6)
+    val BlueDark = Color(0xFF2563EB)
+    val BlueSoft = Color(0xFF93B4F5)
+    val Online = Color(0xFF10B981)
+
+    // Light surfaces
+    val CanvasLight = Color(0xFFEFF3F8)
+    val SearchLight = Color(0xFFE3EAF3)
+    val DividerPillLight = Color(0xFFE1E8F0)
+
+    // Text
+    val TextPrimary = Color(0xFF111827)
+    val TextSecondary = Color(0xFF6B7280)
+    val TextTertiary = Color(0xFF9CA3AF)
+
+    // Dark surfaces
+    val CanvasDark = Color(0xFF0B1220)
+    val SurfaceDark = Color(0xFF141E30)
+    val SurfaceElevatedDark = Color(0xFF1B2739)
+    val SearchDark = Color(0xFF182338)
+
+    val BadgeMuted = Color(0xFFC4CEDA)
+    val Danger = Color(0xFFEF4444)
+    val Warning = Color(0xFFF59E0B)
+}
+
+data class CypherColors(
+    val canvas: Color,
+    val surface: Color,
+    val surfaceElevated: Color,
+    val searchField: Color,
+    val bubbleIncoming: Color,
+    val bubbleIncomingText: Color,
+    val bubbleOutgoing: Color,
+    val bubbleOutgoingText: Color,
+    val accent: Color,
+    val accentDark: Color,
+    val online: Color,
+    val textPrimary: Color,
+    val textSecondary: Color,
+    val textTertiary: Color,
+    val badgeMuted: Color,
+    val danger: Color,
+    val dividerPill: Color,
+    val isDark: Boolean,
 )
 
-internal val LightBitchatColorScheme = lightColorScheme(
-    primary = Color(0xFF248A3D),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFD5F1D8),
-    onPrimaryContainer = Color(0xFF0A3212),
-    secondary = Color(0xFF007AFF),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFD6E9FF),
-    onSecondaryContainer = Color(0xFF002C5C),
-    tertiary = LightBitchatPalette.accentOrange,
-    onTertiary = Color.Black,
-    background = Color(0xFFFFFFFF),
-    onBackground = Color(0xFF131A13),
-    surface = Color(0xFFF2F6F2),
-    onSurface = Color(0xFF131A13),
-    surfaceVariant = Color(0xFFE7EDE7),
-    onSurfaceVariant = Color(0xFF4C574C),
-    outline = Color(0xFFCBD6CB),
-    outlineVariant = Color(0xFFDEE6DE),
-    error = Color(0xFFD70015),
-    onError = Color.White
+val LightCypherColors = CypherColors(
+    canvas = CypherPalette.CanvasLight,
+    surface = Color.White,
+    surfaceElevated = Color.White,
+    searchField = CypherPalette.SearchLight,
+    bubbleIncoming = Color.White,
+    bubbleIncomingText = CypherPalette.TextPrimary,
+    bubbleOutgoing = CypherPalette.Blue,
+    bubbleOutgoingText = Color.White,
+    accent = CypherPalette.Blue,
+    accentDark = CypherPalette.BlueDark,
+    online = CypherPalette.Online,
+    textPrimary = CypherPalette.TextPrimary,
+    textSecondary = CypherPalette.TextSecondary,
+    textTertiary = CypherPalette.TextTertiary,
+    badgeMuted = CypherPalette.BadgeMuted,
+    danger = CypherPalette.Danger,
+    dividerPill = CypherPalette.DividerPillLight,
+    isDark = false,
 )
 
+val DarkCypherColors = CypherColors(
+    canvas = CypherPalette.CanvasDark,
+    surface = CypherPalette.SurfaceDark,
+    surfaceElevated = CypherPalette.SurfaceElevatedDark,
+    searchField = Color(0xFF182338),
+    bubbleIncoming = CypherPalette.SurfaceElevatedDark,
+    bubbleIncomingText = Color(0xFFE7EDF5),
+    bubbleOutgoing = Color(0xFF2F6FE4),
+    bubbleOutgoingText = Color.White,
+    accent = Color(0xFF5B9BFB),
+    accentDark = CypherPalette.Blue,
+    online = CypherPalette.Online,
+    textPrimary = Color(0xFFE7EDF5),
+    textSecondary = Color(0xFF9AA8BC),
+    textTertiary = Color(0xFF67748A),
+    badgeMuted = Color(0xFF46536B),
+    danger = Color(0xFFF87171),
+    dividerPill = Color(0xFF1E2A40),
+    isDark = true,
+)
+
+val LocalCypherColors = staticCompositionLocalOf { LightCypherColors }
+
+/** Material scheme derived from [CypherColors] so M3 components match. */
+private fun materialScheme(c: CypherColors): ColorScheme = if (c.isDark) {
+    darkColorScheme(
+        primary = c.accent,
+        onPrimary = Color.White,
+        primaryContainer = Color(0xFF1D3A6E),
+        onPrimaryContainer = Color(0xFFD6E3FB),
+        secondary = c.accent,
+        background = c.canvas,
+        onBackground = c.textPrimary,
+        surface = c.surface,
+        onSurface = c.textPrimary,
+        surfaceVariant = c.surfaceElevated,
+        onSurfaceVariant = c.textSecondary,
+        outline = Color(0xFF3A465C),
+        error = c.danger,
+    )
+} else {
+    lightColorScheme(
+        primary = c.accentDark,
+        onPrimary = Color.White,
+        primaryContainer = Color(0xFFDCE9FD),
+        onPrimaryContainer = Color(0xFF153E7E),
+        secondary = c.accentDark,
+        background = c.canvas,
+        onBackground = c.textPrimary,
+        surface = c.surface,
+        onSurface = c.textPrimary,
+        surfaceVariant = c.searchField,
+        onSurfaceVariant = c.textSecondary,
+        outline = Color(0xFFC9D4E2),
+        error = c.danger,
+    )
+}
+
+/**
+ * The Cypher theme. Follows the user's system dark-mode setting unless a
+ * preference is pinned in settings.
+ */
 @Composable
-fun BitchatTheme(
-    darkTheme: Boolean? = null,
-    content: @Composable () -> Unit
+fun CypherTheme(
+    preference: ThemePreference? = null,
+    content: @Composable () -> Unit,
 ) {
-    // App-level override from ThemePreferenceManager
-    val themePref by ThemePreferenceManager.themeFlow.collectAsState(initial = ThemePreference.System)
-    val shouldUseDark = when (darkTheme) {
-        true -> true
-        false -> false
-        null -> when (themePref) {
-            ThemePreference.Dark -> true
-            ThemePreference.Light -> false
-            ThemePreference.System -> isSystemInDarkTheme()
-        }
+    val flowPreference by ThemePreferenceManager.themeFlow.collectAsState()
+    val pref = preference ?: flowPreference
+    val dark = when (pref) {
+        ThemePreference.System -> isSystemInDarkTheme()
+        ThemePreference.Light -> false
+        ThemePreference.Dark -> true
     }
-
-    val colorScheme = if (shouldUseDark) DarkBitchatColorScheme else LightBitchatColorScheme
-    val palette = if (shouldUseDark) DarkBitchatPalette else LightBitchatPalette
+    val colors = if (dark) DarkCypherColors else LightCypherColors
 
     val view = LocalView.current
-    SideEffect {
-        (view.context as? Activity)?.window?.let { window ->
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                window.insetsController?.setSystemBarsAppearance(
-                    if (!shouldUseDark) WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS else 0,
-                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                window.decorView.systemUiVisibility = if (!shouldUseDark) {
-                    View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                } else 0
-            }
-            window.navigationBarColor = colorScheme.background.toArgb()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                window.isNavigationBarContrastEnforced = false
-            }
-        }
+    val context = LocalContext.current
+    androidx.compose.runtime.SideEffect {
+        val window = (context as? Activity)?.window ?: return@SideEffect
+        val insets = WindowCompat.getInsetsController(window, view)
+        insets.isAppearanceLightStatusBars = !dark
+        insets.isAppearanceLightNavigationBars = !dark
+        window.statusBarColor = colors.canvas.toArgb()
+        window.navigationBarColor = colors.surface.toArgb()
     }
 
-    CompositionLocalProvider(LocalBitchatPalette provides palette) {
+    CompositionLocalProvider(LocalCypherColors provides colors) {
         MaterialTheme(
-            colorScheme = colorScheme,
-            typography = Typography,
-            content = content
+            colorScheme = materialScheme(colors),
+            typography = CypherTypography,
+            content = content,
         )
     }
+}
+
+/** Convenience accessor for the extended palette. */
+object CypherThemeDefaults {
+    val colors: CypherColors
+        @Composable get() = LocalCypherColors.current
 }

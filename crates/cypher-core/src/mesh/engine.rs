@@ -88,6 +88,9 @@ pub enum EngineEvent {
     FileTransferReceived {
         sender: crate::PeerId,
         file: crate::protocol::file::BitchatFilePacket,
+        /// True when the file arrived over a private Noise payload
+        /// (0x20/0x09) instead of a public broadcast.
+        is_private: bool,
     },
     /// A board payload arrived (already signature-verified).
     BoardPayloadReceived(crate::protocol::board::BoardWire),
@@ -1542,6 +1545,7 @@ impl MeshEngine {
                             out.events.push(EngineEvent::FileTransferReceived {
                                 sender: sender.clone(),
                                 file,
+                                is_private: true,
                             });
                         }
                     }
@@ -1552,6 +1556,7 @@ impl MeshEngine {
                             out.events.push(EngineEvent::FileTransferReceived {
                                 sender: sender.clone(),
                                 file,
+                                is_private: true,
                             });
                         }
                     }
@@ -1705,6 +1710,7 @@ impl MeshEngine {
                 out.events.push(EngineEvent::FileTransferReceived {
                     sender: sender.clone(),
                     file,
+                    is_private: false,
                 });
             }
         }

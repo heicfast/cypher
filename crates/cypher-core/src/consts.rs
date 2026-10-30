@@ -65,6 +65,11 @@ pub const BLE_RECENT_TRAFFIC_FORCE_SCAN_S: f64 = 10.0;
 pub const BLE_TIMEOUT_DISCOVERY_IGNORE_S: f64 = 15.0;
 pub const BLE_DISCONNECT_DISCOVERY_IGNORE_S: f64 = 3.0;
 pub const BLE_CONNECT_TIMEOUT_BACKOFF_WINDOW_S: f64 = 120.0;
+/// Safety timeout before re-issuing a `Connect` for a peripheral whose
+/// attempt never resolved with `LinkUp`/`LinkDown` (stacks that silently
+/// drop the attempt). bitchat's pending-connection tracker clears on
+/// disconnect; this covers the missing-failure case.
+pub const BLE_CONNECT_RETRY_MS: u64 = 30_000;
 pub const BLE_RESTART_SCAN_DELAY_S: f64 = 0.1;
 pub const BLE_PENDING_WRITE_CAP_BYTES: usize = 1_000_000;
 pub const BLE_NOTIFICATIONS_CAP_COUNT: usize = 128;

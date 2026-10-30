@@ -1,4 +1,4 @@
-75e8d192916aedbecc53a778e4b870832034607e7b48b5cbf92d4567a046b34e  app/src/main/jniLibs/arm64-v8a/libcypher.so
-dd2cde21b98544e63287b072359e790f7bf71956b70b999208076357f1e4d03a  app/src/main/jniLibs/armeabi-v7a/libcypher.so
-97b7d72096abb65b282277412eb1e732f012831ad8d5c48bcd6581ddceabd3dd  app/src/main/jniLibs/x86/libcypher.so
-b49014d57db6f646c794986ec7167ee0e1204c1a3841c1214851538f667c7961  app/src/main/jniLibs/x86_64/libcypher.so
+f7982e93264bc7afaba13f28c158ebbe8e3021357dc606559deb7bfd3f98fc38  app/src/main/jniLibs/arm64-v8a/libcypher.so
+a9c780af8d877589dd4b2a32889eab2c81817ecfbabd7b8623936cb52eea2a81  app/src/main/jniLibs/armeabi-v7a/libcypher.so
+8029b54a66c9435a1d18c80b323370a013c72edcc22021288c4671237b623b28  app/src/main/jniLibs/x86/libcypher.so
+89bc258f4edb666ccefdd2f0ec0e5c649d73c3baf8f8080a0c02225032c80849  app/src/main/jniLibs/x86_64/libcypher.so

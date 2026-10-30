@@ -166,6 +166,12 @@ pub struct MeshEngine {
     radio_state: RadioState,
     scanning: bool,
     advertising: bool,
+    /// Central connection attempts in flight (peripheral -> attempt time).
+    /// Duplicate `Discovered` events for an in-flight peripheral are ignored
+    /// (Android delivers scan hits continuously with duplicates allowed —
+    /// without this guard every advertisement triggers a new `connectGatt`).
+    /// Cleared on LinkUp/LinkDown; retried after the safety timeout.
+    connecting: HashMap<PeripheralId, u64>,
     /// Private messages queued while no Noise session exists; drained on
     /// session establishment (bitchat's BLENoiseSessionQueues semantics).
     pending: PendingQueues,
@@ -226,6 +232,7 @@ impl MeshEngine {
             radio_state: RadioState::Unknown,
             scanning: false,
             advertising: false,
+            connecting: HashMap::new(),
             pending: PendingQueues::new(),
             gossip: crate::features::gossip::GossipSyncManager::new(),
             courier: CourierStore::new(),
@@ -296,6 +303,10 @@ impl MeshEngine {
         match event {
             LinkEvent::RadioStateChanged(state) => {
                 self.radio_state = state;
+                if state != RadioState::PoweredOn {
+                    // All central attempts die with the radio.
+                    self.connecting.clear();
+                }
                 out.events.push(EngineEvent::BluetoothStateChanged(state));
                 if state == RadioState::PoweredOn {
                     self.start_services(&mut out, now);
@@ -309,6 +320,10 @@ impl MeshEngine {
                 self.ingest_bytes(link, direction, &bytes, &mut out, now);
             }
             LinkEvent::LinkUp { link, direction } => {
+                if direction == LinkDirection::Central {
+                    // The host reuses the peripheral id as the central link id.
+                    self.connecting.remove(&(link as PeripheralId));
+                }
                 self.links.entry(link).or_insert_with(|| LinkBinding {
                     direction,
                     bound_peer: None,
@@ -319,7 +334,9 @@ impl MeshEngine {
                 self.send_announce(true, &mut out, now);
             }
             LinkEvent::LinkDown { link, direction } => {
-                let _ = direction;
+                if direction == LinkDirection::Central {
+                    self.connecting.remove(&(link as PeripheralId));
+                }
                 self.link_down(link, &mut out, now);
             }
             LinkEvent::CentralSubscribed { link } => {
@@ -581,7 +598,7 @@ impl MeshEngine {
         rssi: i32,
         connectable: bool,
         out: &mut EngineOutput,
-        _now: u64,
+        now: u64,
     ) {
         if !connectable {
             return;
@@ -601,6 +618,21 @@ impl MeshEngine {
         if self.links.len() >= consts::BLE_MAX_CENTRAL_LINKS {
             return;
         }
+        // Already connected to this peripheral — the host reuses the
+        // peripheral id as the central link id, so an existing link binding
+        // means the connection is live.
+        if self.links.contains_key(&(peripheral as LinkId)) {
+            return;
+        }
+        // Connection-storm guard: one attempt per peripheral at a time
+        // (bitchat's pending-connection tracker semantics). The safety
+        // timeout covers stacks that never report failure.
+        if let Some(attempt_ms) = self.connecting.get(&peripheral).copied() {
+            if now.saturating_sub(attempt_ms) < consts::BLE_CONNECT_RETRY_MS {
+                return;
+            }
+        }
+        self.connecting.insert(peripheral, now);
         out.commands.push(LinkCommand::Connect { peripheral });
     }
 

@@ -37,6 +37,9 @@ jobs:
       - name: Verify checked-in native libraries
         run: ./tools/verify-native-checksums.sh
 
+      - name: Verify JNI symbols match the Kotlin declarations
+        run: ./tools/verify-jni-symbols.sh
+
       - name: Build APK
         working-directory: android
         run: |

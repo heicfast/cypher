@@ -42,7 +42,9 @@ class MeshForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        pumpThread.quitSafely()
+        if (::pumpThread.isInitialized) {
+            pumpThread.quitSafely()
+        }
         linkLayer?.stop()
         MeshRuntime.stop()
         super.onDestroy()

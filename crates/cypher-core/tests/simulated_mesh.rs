@@ -356,3 +356,118 @@ fn mesh_ping_measures_rtt() {
         rtts[0]
     );
 }
+
+/// Connection-storm guard: duplicate `Discovered` events for one peripheral
+/// (Android delivers scan hits continuously with duplicates allowed) must
+/// produce exactly one `Connect`, and a live link must suppress reconnects.
+#[test]
+fn discovery_dedups_connection_attempts() {
+    let clock = Clock::new(1_000_000);
+    let identity = CypherIdentity::generate();
+    let mut engine = MeshEngine::with_clock(identity, "alice".to_string(), clock.boxed());
+
+    engine.handle(LinkEvent::RadioStateChanged(RadioState::PoweredOn));
+
+    let discover = |engine: &mut MeshEngine, now: u64| {
+        let out = engine.handle(LinkEvent::Discovered {
+            peripheral: 7,
+            rssi: -50,
+            connectable: true,
+        });
+        let _ = now;
+        out.commands
+            .iter()
+            .filter(|c| matches!(c, LinkCommand::Connect { peripheral: 7 }))
+            .count()
+    };
+
+    // First discovery: connect.
+    assert_eq!(
+        discover(&mut engine, clock.now()),
+        1,
+        "first discovery connects"
+    );
+
+    // Repeated discoveries while the attempt is in flight: suppressed.
+    clock.advance(1_000);
+    assert_eq!(
+        discover(&mut engine, clock.now()),
+        0,
+        "in-flight attempt suppresses duplicate connects"
+    );
+    clock.advance(1_000);
+    assert_eq!(discover(&mut engine, clock.now()), 0);
+
+    // Link established: the live link suppresses reconnects.
+    engine.handle(LinkEvent::LinkUp {
+        link: 7,
+        direction: LinkDirection::Central,
+    });
+    clock.advance(1_000);
+    assert_eq!(
+        discover(&mut engine, clock.now()),
+        0,
+        "existing link suppresses reconnect"
+    );
+
+    // Link down: a fresh attempt is allowed.
+    engine.handle(LinkEvent::LinkDown {
+        link: 7,
+        direction: LinkDirection::Central,
+    });
+    assert_eq!(
+        discover(&mut engine, clock.now()),
+        1,
+        "fresh attempt after link down"
+    );
+
+    // Safety timeout: an attempt that never resolved gets retried.
+    clock.advance(31_000);
+    assert_eq!(
+        discover(&mut engine, clock.now()),
+        1,
+        "retry allowed after the safety timeout"
+    );
+
+    // Radio off clears all pending attempts; radio on allows a new one.
+    engine.handle(LinkEvent::RadioStateChanged(RadioState::PoweredOff));
+    engine.handle(LinkEvent::RadioStateChanged(RadioState::PoweredOn));
+    assert_eq!(
+        discover(&mut engine, clock.now()),
+        1,
+        "radio cycle clears pending attempts"
+    );
+}
+
+/// Non-connectable advertisers and weak-RSSI peripherals are never connected.
+#[test]
+fn discovery_filters_non_connectable_and_weak() {
+    let clock = Clock::new(1_000_000);
+    let identity = CypherIdentity::generate();
+    let mut engine = MeshEngine::with_clock(identity, "alice".to_string(), clock.boxed());
+    engine.handle(LinkEvent::RadioStateChanged(RadioState::PoweredOn));
+
+    let out = engine.handle(LinkEvent::Discovered {
+        peripheral: 9,
+        rssi: -50,
+        connectable: false,
+    });
+    assert!(
+        out.commands
+            .iter()
+            .all(|c| !matches!(c, LinkCommand::Connect { peripheral: 9 })),
+        "non-connectable advertiser ignored"
+    );
+
+    let out = engine.handle(LinkEvent::Discovered {
+        peripheral: 10,
+        rssi: -120,
+        connectable: true,
+    });
+    assert!(
+        out.commands
+            .iter()
+            .all(|c| !matches!(c, LinkCommand::Connect { peripheral: 10 })),
+        "weak-RSSI peripheral ignored"
+    );
+}

@@ -60,6 +60,15 @@ jobs:
             cargo ndk -t $target -o android/app/src/main/jniLibs build --release -p cypher-android
           done
 
+      - name: Verify JNI symbols match the Kotlin declarations
+        run: ./tools/verify-jni-symbols.sh
+
+      - name: Verify no host paths leaked into the binaries
+        run: |
+          # The checksum manifest only matches when the committed libs equal
+          # this exact build; the host-path scan is the hard gate either way.
+          ./tools/verify-native-checksums.sh || true
+
       - name: Upload native libs
         uses: actions/upload-artifact@v4
         with:

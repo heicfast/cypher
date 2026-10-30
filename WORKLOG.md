@@ -183,3 +183,65 @@ Development log for the bitchat → Cypher Rust port. Newest entries at the bott
 mesh + 14 parity), clippy clean workspace-wide, rustfmt applied,
 17 commits, all pushed. Token verified absent from every commit
 (`git log -p | grep -c ghp_` → 0).
+
+## 2026-10-30 (session 3) — startup-crash triage + radio-layer parity
+
+### The startup crash (root cause)
+The app crashed on open with `UnsatisfiedLinkError`: the Rust JNI crate
+exported `Java_chat_cypher_android_CypherBridge_*` but the Kotlin object
+lives in `chat.cypher.android.core`, so the JVM looked up
+`Java_chat_cypher_android_core_CypherBridge_*`. Fixed all 10 exports; the
+checked-in .so files still had the old symbols (rebuilt all 4 ABIs).
+`tools/verify-jni-symbols.sh` now cross-checks every Kotlin `external fun`
+against every .so's exported symbols — a missing symbol is a build failure
+instead of a runtime crash. Wired into both CI workflows.
+
+### Radio-layer divergences vs bitchat-android (all fixed)
+1. **No MTU negotiation** — Android defaults to MTU 23 (20 usable bytes);
+   the engine fragments to a 512 budget, so every large write would fail.
+   Ported bitchat's sequence exactly: CONNECTED → requestMtu(517) →
+   onMtuChanged(SUCCESS) → discoverServices (bitchat disconnects on MTU
+   failure — same here).
+2. **No write serialization** — Android allows one outstanding GATT op per
+   link; a multi-write command batch would silently drop packets. Ported
+   the BluetoothPacketBroadcaster queue: per-link pending queue (256
+   sends / 1 MiB caps), one in-flight op, drained by
+   onCharacteristicWrite (client) and onNotificationSent (server, was
+   missing entirely), 15 ms rejected-start retry, 3 callback-failure
+   retries, queue drop on link down.
+3. **Connection storm** — with allow-duplicates scanning every
+   advertisement re-triggered `Connect`. Engine now keeps a pending-connect
+   map (peripheral → attempt time): duplicate discoveries suppressed, live
+   links never reconnected, cleared on LinkUp/LinkDown/radio-off, retried
+   after a 30 s safety timeout. Kotlin side also guards in-flight
+   attempts. 2 new simulated-mesh tests cover the state machine.
+4. **Deferred GATT close** — 500 ms cleanup delay after STATE_DISCONNECTED
+   (bitchat's CLEANUP_DELAY) instead of closing under the callback.
+
+### Other crash paths fixed
+- Permission callback started the connectedDevice foreground service even
+  when the user DENIED permissions → SecurityException on API 31+. Now the
+  service only starts when all runtime grants are in.
+- `MeshForegroundService.onDestroy` called `pumpThread.quitSafely()` when
+  `pumpThread` was never initialized → lateinit crash. Guarded.
+- `BleLinkLayer.tick()` returned the events JSON which the service
+  discarded — tick-sourced events (SessionEstablished, deliveries, peer
+  changes) never reached the UI. Now published through the event bus.
+- MainActivity got `launchMode="singleTop"` (bitchat parity).
+
+### Verified clean (no change needed)
+- GATT UUIDs match bitchat mainnet exactly (service F47B5E2D-…-4B5C,
+  characteristic A1B2C3D4-…-4C5D, standard CCCD).
+- Manifest: all BLE/FGS/notification permissions correct; the
+  Internet/WiFi-Aware/Camera/storage permissions we omit are the
+  intentionally stripped dual-architecture legs.
+- 16 KiB ELF alignment on arm64-v8a and x86_64 (NDK 28 default) —
+  Android 15+ compatible.
+- LinkCommand byte encoding ↔ Kotlin decodeCommand match tag-for-tag.
+
+### State
+236 tests green (2 new), clippy clean, fmt applied, JNI symbol gate +
+checksum manifest regenerated and passing. Maven Central rate-limits the
+sandbox IP again (429) — local APK build attempted through the Gradle
+Plugin Portal mirror; the authoritative build check is CI (GitHub
+runners).

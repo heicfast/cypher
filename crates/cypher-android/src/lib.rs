@@ -88,7 +88,7 @@ fn vec_to_jbytes(env: &JNIEnv, data: &[u8]) -> jbyteArray {
 }
 
 #[no_mangle]
-pub extern "system" fn Java_chat_cypher_android_CypherBridge_engineCreate(
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_engineCreate(
     mut env: JNIEnv,
     _class: JClass,
     data_dir: JString,
@@ -127,7 +127,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_engineCreate(
 }
 
 #[no_mangle]
-pub extern "system" fn Java_chat_cypher_android_CypherBridge_engineDestroy(
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_engineDestroy(
     _env: JNIEnv,
     _class: JClass,
     handle: jlong,
@@ -142,7 +142,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_engineDestroy(
 /// 2 LinkUp{link, direction}, 3 LinkDown{link},
 /// 4 Discovered{peripheral, rssi}, 5 CentralSubscribed{link}.
 #[no_mangle]
-pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeHandleEvent(
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeHandleEvent(
     env: JNIEnv,
     _class: JClass,
     handle: jlong,
@@ -198,7 +198,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeHandleEvent(
 }
 
 #[no_mangle]
-pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeTick(
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeTick(
     env: JNIEnv,
     _class: JClass,
     handle: jlong,
@@ -214,7 +214,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeTick(
 }
 
 #[no_mangle]
-pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeSendPublicMessage(
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSendPublicMessage(
     mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
@@ -235,7 +235,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeSendPublicMes
 }
 
 #[no_mangle]
-pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeSendPrivateMessage(
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSendPrivateMessage(
     mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
@@ -269,7 +269,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeSendPrivateMe
 }
 
 #[no_mangle]
-pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeSendMeshPing(
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeSendMeshPing(
     mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
@@ -291,7 +291,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeSendMeshPing(
 }
 
 #[no_mangle]
-pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeAnnounce(
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeAnnounce(
     env: JNIEnv,
     _class: JClass,
     handle: jlong,
@@ -308,7 +308,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeAnnounce(
 
 /// JSON snapshot of the local identity + peer state for the UI.
 #[no_mangle]
-pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeStateJson(
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_nativeStateJson(
     env: JNIEnv,
     _class: JClass,
     handle: jlong,
@@ -345,7 +345,7 @@ pub extern "system" fn Java_chat_cypher_android_CypherBridge_nativeStateJson(
 /// Command decoder for the Kotlin side: parse one command blob into
 /// (op, link, direction, payloadBytes) tuples for the radio executor.
 #[no_mangle]
-pub extern "system" fn Java_chat_cypher_android_CypherBridge_parseCommands(
+pub extern "system" fn Java_chat_cypher_android_core_CypherBridge_parseCommands(
     mut env: JNIEnv,
     _class: JClass,
     blob: jbyteArray,

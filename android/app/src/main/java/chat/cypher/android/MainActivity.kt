@@ -33,25 +33,33 @@ class MainActivity : ComponentActivity() {
         return permissions.toTypedArray()
     }
 
+    /** All runtime permissions the mesh needs are granted. */
+    private fun meshPermissionsGranted(): Boolean =
+        requiredPermissions().all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val missing = requiredPermissions().filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missing.isNotEmpty()) {
+        if (!meshPermissionsGranted()) {
             @Suppress("NAME_SHADOWING")
             val permissionLauncher =
                 registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-                    maybeStartMesh()
+                    // Only start the mesh when the runtime grants are in —
+                    // starting a connectedDevice foreground service without
+                    // BLUETOOTH_CONNECT throws SecurityException on API 31+.
+                    if (meshPermissionsGranted()) {
+                        maybeStartMesh()
+                    }
                 }
-            permissionLauncher.launch(missing.toTypedArray())
+            permissionLauncher.launch(requiredPermissions())
         } else {
             maybeStartMesh()
         }
 
         val adapter = BluetoothAdapter.getDefaultAdapter()
-        if (adapter != null && !adapter.isEnabled) {
+        if (adapter != null && !adapter.isEnabled && meshPermissionsGranted()) {
             startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), 1)
         }
 

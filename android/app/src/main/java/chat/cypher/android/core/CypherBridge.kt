@@ -65,6 +65,35 @@ object CypherBridge {
     /** JSON snapshot: local identity + peers (for the UI). */
     external fun nativeStateJson(handle: Long): ByteArray?
 
+    /** Change the nickname and force-broadcast an announce. */
+    external fun nativeSetNickname(handle: Long, nickname: String): ByteArray?
+
+    /** Send a typed Noise payload (0x02 receipts, 0x03 ACKs, …). */
+    external fun nativeSendTypedNoisePayload(
+        handle: Long,
+        peerHex: String,
+        payloadType: Int,
+        body: ByteArray,
+    ): ByteArray?
+
+    /** Send a read receipt for a private message we have now seen. */
+    external fun nativeSendReadReceipt(handle: Long, peerHex: String, messageId: String): ByteArray?
+
+    /** Send a delivery ACK for a received private message. */
+    external fun nativeSendDeliveryAck(handle: Long, peerHex: String, messageId: String): ByteArray?
+
+    /** Mark a peer favorite/unfavorite (mirrors bitchat favorites). */
+    external fun nativeSetPeerFavorite(handle: Long, peerHex: String, favorite: Boolean): ByteArray?
+
+    /** Mark a peer's fingerprint verified/unverified. */
+    external fun nativeSetPeerVerified(handle: Long, peerHex: String, verified: Boolean): ByteArray?
+
+    /** Block a peer (drop + ignore all future traffic). */
+    external fun nativeBlockPeer(handle: Long, peerHex: String): ByteArray?
+
+    /** Unblock a peer. */
+    external fun nativeUnblockPeer(handle: Long, peerHex: String): ByteArray?
+
     // ---- response framing ---------------------------------------------------
 
     /**

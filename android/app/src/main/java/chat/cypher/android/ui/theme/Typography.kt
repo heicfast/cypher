@@ -2,83 +2,99 @@ package chat.cypher.android.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import chat.cypher.android.R
 
-// Base font size for consistent scaling across the app
-internal const val BASE_FONT_SIZE = 14f
+/** Inter — the Cypher design typeface (4 bundled weights). */
+val CypherFontFamily = FontFamily(
+    Font(R.font.inter_regular, FontWeight.Normal),
+    Font(R.font.inter_medium, FontWeight.Medium),
+    Font(R.font.inter_semibold, FontWeight.SemiBold),
+    Font(R.font.inter_bold, FontWeight.Bold),
+)
 
-/**
- * Message body style. The generous leading (1.4x) is what gives the redesigned chat surface
- * its readable rhythm; without an explicit lineHeight, Compose falls back to the font's own
- * metrics and lines sit too tightly for long paragraphs.
- */
-val MessageBodyTextStyle = ChatVisualTokens.MessageBodyStyle
-
-/** Sender label above a message group. Single line, never wraps. */
-val MessageSenderTextStyle = ChatVisualTokens.SenderStyle
-
-// Typography matching the iOS monospace design - using BASE_FONT_SIZE for consistency
-val Typography = Typography(
-    bodyLarge = TextStyle(
-        fontFamily = BitchatFontFamily,
-        fontWeight = FontWeight.Normal,
-        fontSize = (BASE_FONT_SIZE + 1).sp,
-        lineHeight = (BASE_FONT_SIZE + 7).sp
+val CypherTypography = Typography(
+    // Large screen titles ("Chats", "Contacts")
+    displaySmall = TextStyle(
+        fontFamily = CypherFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 30.sp,
+        lineHeight = 36.sp,
+        letterSpacing = (-0.5).sp,
     ),
-    bodyMedium = TextStyle(
-        fontFamily = BitchatFontFamily,
-        fontWeight = FontWeight.Normal,
-        fontSize = BASE_FONT_SIZE.sp,
-        lineHeight = (BASE_FONT_SIZE + 6).sp
-    ),
-    bodySmall = TextStyle(
-        fontFamily = BitchatFontFamily,
-        fontWeight = FontWeight.Normal,
-        fontSize = (BASE_FONT_SIZE - 3).sp,
-        lineHeight = (BASE_FONT_SIZE + 1).sp
+    // Conversation header name
+    headlineMedium = TextStyle(
+        fontFamily = CypherFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 17.sp,
+        lineHeight = 22.sp,
+        letterSpacing = (-0.2).sp,
     ),
     headlineSmall = TextStyle(
-        fontFamily = BitchatFontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = (BASE_FONT_SIZE + 3).sp,
-        lineHeight = (BASE_FONT_SIZE + 9).sp
+        fontFamily = CypherFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        lineHeight = 21.sp,
+        letterSpacing = (-0.2).sp,
     ),
-    // Previously unset, which leaked the Roboto default into onboarding + sheet titles.
-    headlineLarge = TextStyle(
-        fontFamily = BitchatFontFamily,
-        fontWeight = FontWeight.Bold,
-        fontSize = (BASE_FONT_SIZE + 13).sp,
-        lineHeight = (BASE_FONT_SIZE + 21).sp
-    ),
-    titleLarge = TextStyle(
-        fontFamily = BitchatFontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = (BASE_FONT_SIZE + 5).sp,
-        lineHeight = (BASE_FONT_SIZE + 13).sp
-    ),
+    // Row primary text (names)
     titleMedium = TextStyle(
-        fontFamily = BitchatFontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = (BASE_FONT_SIZE + 1).sp,
-        lineHeight = (BASE_FONT_SIZE + 7).sp
+        fontFamily = CypherFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        lineHeight = 21.sp,
+        letterSpacing = (-0.1).sp,
     ),
-    labelLarge = TextStyle(
-        fontFamily = BitchatFontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = (BASE_FONT_SIZE - 1).sp,
-        lineHeight = (BASE_FONT_SIZE + 5).sp
+    titleSmall = TextStyle(
+        fontFamily = CypherFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 14.sp,
+        lineHeight = 18.sp,
     ),
+    // Message body
+    bodyLarge = TextStyle(
+        fontFamily = CypherFontFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 15.sp,
+        lineHeight = 21.sp,
+        letterSpacing = 0.sp,
+    ),
+    // Previews / secondary body
+    bodyMedium = TextStyle(
+        fontFamily = CypherFontFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 14.sp,
+        lineHeight = 19.sp,
+        letterSpacing = 0.sp,
+    ),
+    bodySmall = TextStyle(
+        fontFamily = CypherFontFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+    ),
+    // Timestamps / metadata
     labelMedium = TextStyle(
-        fontFamily = BitchatFontFamily,
+        fontFamily = CypherFontFamily,
         fontWeight = FontWeight.Medium,
-        fontSize = (BASE_FONT_SIZE - 2).sp,
-        lineHeight = (BASE_FONT_SIZE + 3).sp
+        fontSize = 11.sp,
+        lineHeight = 14.sp,
+        letterSpacing = 0.1.sp,
     ),
     labelSmall = TextStyle(
-        fontFamily = BitchatFontFamily,
-        fontWeight = FontWeight.Normal,
-        fontSize = (BASE_FONT_SIZE - 4).sp,
-        lineHeight = (BASE_FONT_SIZE + 1).sp
-    )
+        fontFamily = CypherFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 10.sp,
+        lineHeight = 13.sp,
+    ),
+    // Buttons
+    labelLarge = TextStyle(
+        fontFamily = CypherFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 15.sp,
+        lineHeight = 20.sp,
+    ),
 )

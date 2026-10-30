@@ -35,7 +35,9 @@ class MainActivity : ComponentActivity() {
                         maybeStartMesh()
                     }
                 } else {
-                    maybeStartMesh()
+                    // Start the service once per composition lifetime (not
+                    // per recomposition).
+                    androidx.compose.runtime.LaunchedEffect(Unit) { maybeStartMesh() }
                     AppScaffold()
                 }
             }

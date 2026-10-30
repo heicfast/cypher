@@ -70,7 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleOwner
 import chat.cypher.android.core.PeerIdentity
 import chat.cypher.android.onboarding.BatteryOptimizationHelper
 import chat.cypher.android.ui.components.PeerAvatar
@@ -99,7 +99,7 @@ fun ProfileTab(
     val palette = LocalCypherPalette.current
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = context as? LifecycleOwner
 
     var isEditingNickname by remember { mutableStateOf(false) }
     var draftNickname by remember(nickname) { mutableStateOf(nickname) }
@@ -121,8 +121,8 @@ fun ProfileTab(
                 isBatteryUnrestricted = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)
             }
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        lifecycleOwner?.lifecycle?.addObserver(observer)
+        onDispose { lifecycleOwner?.lifecycle?.removeObserver(observer) }
     }
 
     val fingerprintGrid = remember(myFingerprintHex, myPeerIdHex) {

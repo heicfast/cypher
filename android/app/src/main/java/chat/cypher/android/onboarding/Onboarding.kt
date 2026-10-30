@@ -92,7 +92,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleOwner
 import chat.cypher.android.ui.theme.CypherDisplayFontFamily
 import chat.cypher.android.ui.theme.CypherMonoFontFamily
 import chat.cypher.android.ui.theme.LocalCypherPalette
@@ -217,7 +217,7 @@ fun OnboardingFlow(
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = context as? LifecycleOwner
     val palette = LocalCypherPalette.current
 
     var refreshTrigger by remember { mutableIntStateOf(0) }
@@ -243,8 +243,8 @@ fun OnboardingFlow(
                 refreshTrigger++
             }
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        lifecycleOwner?.lifecycle?.addObserver(observer)
+        onDispose { lifecycleOwner?.lifecycle?.removeObserver(observer) }
     }
 
     LaunchedEffect(refreshTrigger, batteryOptimizationSkipped) {

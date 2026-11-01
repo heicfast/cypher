@@ -19,6 +19,15 @@ object CypherBridge {
         false
     }
 
+    val isLoaded: Boolean
+        get() = isLibraryLoaded
+
+    fun ensureLoaded(): Boolean = isLibraryLoaded
+
+    fun nativeVersion(): String =
+        if (isLibraryLoaded) "Rust Core 1.0.0 (Noise_XX_25519_ChaChaPoly_SHA256)"
+        else "1.0.0 (Kotlin + Noise_XX_25519_ChaChaPoly_SHA256)"
+
     /** Create an engine (loads or generates the device identity). */
     external fun engineCreate(dataDir: String, nickname: String): Long
 

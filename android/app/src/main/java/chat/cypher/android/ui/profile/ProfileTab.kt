@@ -1,5 +1,9 @@
 package chat.cypher.android.ui.profile
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,35 +14,48 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.BatteryChargingFull
-import androidx.compose.material.icons.outlined.Hub
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.NotificationsNone
-import androidx.compose.material.icons.outlined.Palette
-import androidx.compose.material.icons.outlined.PersonOutline
-import androidx.compose.material.icons.outlined.Shield
-import androidx.compose.material.icons.outlined.Tag
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.BatterySaver
+import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Hub
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Tag
+import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -46,6 +63,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -54,123 +72,153 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import chat.cypher.android.core.AppThemeMode
+import chat.cypher.android.core.AutoDeleteTimer
 import chat.cypher.android.core.MeshController
 import chat.cypher.android.core.MeshStore
-import chat.cypher.android.core.PeerIdentity
 import chat.cypher.android.onboarding.BatteryOptimizationHelper
-import chat.cypher.android.ui.theme.ThemePreference
+import chat.cypher.android.ui.components.AboutCypherSheet
+import chat.cypher.android.ui.components.PeerAvatar
+import chat.cypher.android.ui.theme.CypherTheme
+import chat.cypher.android.ui.theme.GeistMono
 
-private enum class SettingsModalType {
+private enum class SettingsSubSheet {
     PROFILE,
     PRIVACY_SECURITY,
     MESH_CONNECTIVITY,
     NOTIFICATIONS,
     APPEARANCE,
+    ABOUT,
 }
 
-private data class SettingsMenuRowSpec(
-    val id: String,
+private data class SettingsCategorySpec(
     val title: String,
     val subtitle: String,
     val icon: ImageVector,
+    val testTag: String,
     val onClick: () -> Unit,
 )
 
-/**
- * Screen 8: Settings screen matching the Cipher design specification pixel-by-pixel.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileTab(
-    controller: MeshController,
-    onBack: (() -> Unit)? = null,
-    onOpenVerification: (String?) -> Unit,
-    onOpenAbout: () -> Unit,
-    onOpenMeshNetwork: () -> Unit = {},
-    onOpenChannels: () -> Unit = {},
-    onOpenPanicMode: () -> Unit = {},
+    onBack: () -> Unit,
+    onOpenMeshNetwork: () -> Unit,
+    onOpenSecurityVerification: () -> Unit,
+    onOpenChannels: () -> Unit,
+    onOpenPanicMode: () -> Unit,
+    onRequestBatteryExemption: () -> Unit,
+    onEmergencyWipe: () -> Unit,
 ) {
-    if (onBack != null) {
-        BackHandler(onBack = onBack)
+    BackHandler(onBack = onBack)
+
+    val context = LocalContext.current
+    val palette = CypherTheme.colors
+
+    val nickname by MeshStore.nickname.collectAsState()
+    val statusBio by MeshStore.statusBio.collectAsState()
+    val localIdHex by MeshStore.localIdentityHex.collectAsState()
+    val localFpHex by MeshStore.localFingerprintHex.collectAsState()
+    val autoDeleteTimer by MeshStore.autoDeleteTimer.collectAsState()
+    val themeMode by MeshStore.themeMode.collectAsState()
+    val accentHex by MeshStore.accentHex.collectAsState()
+    val compactMode by MeshStore.compactMode.collectAsState()
+    val screenSecurity by MeshStore.screenSecurityEnabled.collectAsState()
+    val hapticFeedback by MeshStore.hapticFeedbackEnabled.collectAsState()
+    val autoRelay by MeshStore.autoRelayEnabled.collectAsState()
+    val storeAndForward by MeshStore.storeAndForwardEnabled.collectAsState()
+    val coverTraffic by MeshStore.coverTrafficEnabled.collectAsState()
+    val maxTtlHops by MeshStore.maxTtlHops.collectAsState()
+    val bleScanMode by MeshStore.bleScanMode.collectAsState()
+    val notificationsEnabled by MeshStore.notificationsEnabled.collectAsState()
+    val mentionAlertsEnabled by MeshStore.mentionAlertsEnabled.collectAsState()
+    val nearbyAlertsEnabled by MeshStore.nearbyPeerAlertsEnabled.collectAsState()
+    val soundVibrationEnabled by MeshStore.soundVibrationEnabled.collectAsState()
+    val blockedPeers by MeshStore.blockedPeers.collectAsState()
+    val pendingOutboxCount by MeshStore.pendingOutboxCount.collectAsState()
+
+    var activeSheet by remember { mutableStateOf<SettingsSubSheet?>(null) }
+
+    val categories = remember {
+        listOf(
+            SettingsCategorySpec(
+                title = "Profile",
+                subtitle = "Nickname, identity, avatar",
+                icon = Icons.Rounded.Person,
+                testTag = "settings_row_profile",
+                onClick = { activeSheet = SettingsSubSheet.PROFILE },
+            ),
+            SettingsCategorySpec(
+                title = "Privacy & Security",
+                subtitle = "Encryption, verification, panic mode",
+                icon = Icons.Rounded.Security,
+                testTag = "settings_row_privacy",
+                onClick = { activeSheet = SettingsSubSheet.PRIVACY_SECURITY },
+            ),
+            SettingsCategorySpec(
+                title = "Mesh & Connectivity",
+                subtitle = "Bluetooth, relay, hop limit",
+                icon = Icons.Rounded.Hub,
+                testTag = "settings_row_mesh",
+                onClick = { activeSheet = SettingsSubSheet.MESH_CONNECTIVITY },
+            ),
+            SettingsCategorySpec(
+                title = "Channels",
+                subtitle = "Manage and join channels",
+                icon = Icons.Rounded.Tag,
+                testTag = "settings_row_channels",
+                onClick = onOpenChannels,
+            ),
+            SettingsCategorySpec(
+                title = "Notifications",
+                subtitle = "Messages, mentions, nearby alerts",
+                icon = Icons.Rounded.Notifications,
+                testTag = "settings_row_notifications",
+                onClick = { activeSheet = SettingsSubSheet.NOTIFICATIONS },
+            ),
+            SettingsCategorySpec(
+                title = "Appearance",
+                subtitle = "Theme, colors, dark mode",
+                icon = Icons.Rounded.Palette,
+                testTag = "settings_row_appearance",
+                onClick = { activeSheet = SettingsSubSheet.APPEARANCE },
+            ),
+            SettingsCategorySpec(
+                title = "About Cipher",
+                subtitle = "Version 1.0.0 • Open Source",
+                icon = Icons.Rounded.Info,
+                testTag = "settings_row_about",
+                onClick = { activeSheet = SettingsSubSheet.ABOUT },
+            ),
+        )
     }
 
-    var activeModal by remember { mutableStateOf<SettingsModalType?>(null) }
-
-    val rows = listOf(
-        SettingsMenuRowSpec(
-            id = "profile",
-            title = "Profile",
-            subtitle = "Nickname, identity, avatar",
-            icon = Icons.Outlined.PersonOutline,
-            onClick = { activeModal = SettingsModalType.PROFILE },
-        ),
-        SettingsMenuRowSpec(
-            id = "privacy_security",
-            title = "Privacy & Security",
-            subtitle = "Encryption, verification, panic mode",
-            icon = Icons.Outlined.Shield,
-            onClick = { activeModal = SettingsModalType.PRIVACY_SECURITY },
-        ),
-        SettingsMenuRowSpec(
-            id = "mesh_connectivity",
-            title = "Mesh & Connectivity",
-            subtitle = "Bluetooth, relay, hop limit",
-            icon = Icons.Outlined.Hub,
-            onClick = { activeModal = SettingsModalType.MESH_CONNECTIVITY },
-        ),
-        SettingsMenuRowSpec(
-            id = "channels",
-            title = "Channels",
-            subtitle = "Manage and join channels",
-            icon = Icons.Outlined.Tag,
-            onClick = onOpenChannels,
-        ),
-        SettingsMenuRowSpec(
-            id = "notifications",
-            title = "Notifications",
-            subtitle = "Messages, mentions, nearby alerts",
-            icon = Icons.Outlined.NotificationsNone,
-            onClick = { activeModal = SettingsModalType.NOTIFICATIONS },
-        ),
-        SettingsMenuRowSpec(
-            id = "appearance",
-            title = "Appearance",
-            subtitle = "Theme, colors, dark mode",
-            icon = Icons.Outlined.Palette,
-            onClick = { activeModal = SettingsModalType.APPEARANCE },
-        ),
-        SettingsMenuRowSpec(
-            id = "about_cipher",
-            title = "About Cipher",
-            subtitle = "Version 1.0.0 • Open Source",
-            icon = Icons.Outlined.Info,
-            onClick = onOpenAbout,
-        ),
-    )
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0D0E17))
-            .windowInsetsPadding(WindowInsets.statusBars),
-    ) {
-        // Top Header Bar: <- Settings
-        Row(
+    Scaffold(
+        containerColor = palette.bgPrimary,
+    ) { innerPadding ->
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color(0xFF131524), palette.bgPrimary),
+                    ),
+                )
+                .padding(innerPadding),
         ) {
-            if (onBack != null) {
+            // Top Bar: Back Arrow + "Settings"
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 IconButton(
                     onClick = onBack,
                     modifier = Modifier
@@ -178,51 +226,48 @@ fun ProfileTab(
                         .testTag("settings_back_button"),
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                         contentDescription = "Back",
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp),
+                        tint = palette.textPrimary,
                     )
                 }
                 Spacer(modifier = Modifier.width(6.dp))
-            } else {
-                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
+                    ),
+                    color = palette.textPrimary,
+                )
             }
-            Text(
-                text = "Settings",
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        }
 
-        Spacer(modifier = Modifier.height(6.dp))
-
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp)
-                .testTag("settings_list"),
-            contentPadding = PaddingValues(bottom = 32.dp),
-        ) {
-            item {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(Color(0xFF171928))
-                        .border(1.dp, Color(0xFF25283D), RoundedCornerShape(22.dp)),
-                ) {
-                    rows.forEachIndexed { index, row ->
-                        SettingsCardRow(
-                            spec = row,
-                        )
-                        if (index < rows.lastIndex) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(start = 68.dp, end = 16.dp),
-                                thickness = 0.7.dp,
-                                color = Color(0xFF23263A),
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(palette.surface)
+                            .border(1.dp, palette.borderSubtle, RoundedCornerShape(20.dp)),
+                    ) {
+                        categories.forEachIndexed { idx, item ->
+                            SettingsMenuRow(
+                                spec = item,
                             )
+                            if (idx < categories.lastIndex) {
+                                HorizontalDivider(
+                                    color = palette.borderSubtle.copy(alpha = 0.7f),
+                                    thickness = 0.8.dp,
+                                    modifier = Modifier.padding(start = 68.dp, end = 16.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -230,103 +275,166 @@ fun ProfileTab(
         }
     }
 
-    when (activeModal) {
-        SettingsModalType.PROFILE -> {
-            ProfileSettingsModal(
-                controller = controller,
-                onDismiss = { activeModal = null },
+    when (activeSheet) {
+        SettingsSubSheet.PROFILE -> {
+            ProfileSettingsBottomSheet(
+                nickname = nickname,
+                statusBio = statusBio,
+                localIdHex = localIdHex,
+                localFingerprintHex = localFpHex,
+                onDismiss = { activeSheet = null },
+                onSaveNickname = { newNick, newBio ->
+                    MeshController.updateNickname(context, newNick)
+                    MeshStore.updateStatusBio(context, newBio)
+                    activeSheet = null
+                },
+                onRotateIdentity = {
+                    MeshController.rotateIdentity(context)
+                },
             )
         }
-        SettingsModalType.PRIVACY_SECURITY -> {
-            PrivacySecurityModal(
-                onDismiss = { activeModal = null },
+
+        SettingsSubSheet.PRIVACY_SECURITY -> {
+            PrivacySecurityBottomSheet(
+                screenSecurity = screenSecurity,
+                autoDeleteTimer = autoDeleteTimer,
+                blockedPeers = blockedPeers,
+                onDismiss = { activeSheet = null },
+                onToggleScreenSecurity = { MeshStore.setScreenSecurityEnabled(it) },
+                onSelectAutoDelete = { MeshStore.setAutoDeleteTimer(it) },
+                onUnblockPeer = { MeshStore.toggleBlockPeer(it) },
                 onOpenVerification = {
-                    activeModal = null
-                    onOpenVerification(MeshStore.RICK_PEER_KEY)
+                    activeSheet = null
+                    onOpenSecurityVerification()
                 },
                 onOpenPanicMode = {
-                    activeModal = null
+                    activeSheet = null
                     onOpenPanicMode()
                 },
             )
         }
-        SettingsModalType.MESH_CONNECTIVITY -> {
-            MeshConnectivityModal(
-                controller = controller,
-                onDismiss = { activeModal = null },
-                onOpenMeshTopology = {
-                    activeModal = null
+
+        SettingsSubSheet.MESH_CONNECTIVITY -> {
+            MeshConnectivityBottomSheet(
+                autoRelay = autoRelay,
+                storeAndForward = storeAndForward,
+                coverTraffic = coverTraffic,
+                maxTtlHops = maxTtlHops,
+                bleScanMode = bleScanMode,
+                pendingOutboxCount = pendingOutboxCount,
+                isBatteryExempt = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context),
+                onDismiss = { activeSheet = null },
+                onToggleAutoRelay = { MeshStore.setAutoRelayEnabled(it) },
+                onToggleStoreAndForward = { MeshStore.setStoreAndForwardEnabled(it) },
+                onToggleCoverTraffic = { MeshStore.setCoverTrafficEnabled(it) },
+                onUpdateMaxHops = { MeshStore.setMaxTtlHops(it) },
+                onSelectScanMode = { MeshStore.setBleScanMode(it) },
+                onOpenTopology = {
+                    activeSheet = null
                     onOpenMeshNetwork()
+                },
+                onRequestBatteryExemption = {
+                    BatteryOptimizationHelper.launchExemptionRequest(context)
+                    onRequestBatteryExemption()
                 },
             )
         }
-        SettingsModalType.NOTIFICATIONS -> {
-            NotificationsSettingsModal(
-                controller = controller,
-                onDismiss = { activeModal = null },
+
+        SettingsSubSheet.NOTIFICATIONS -> {
+            NotificationsSettingsBottomSheet(
+                notificationsEnabled = notificationsEnabled,
+                mentionAlertsEnabled = mentionAlertsEnabled,
+                nearbyAlertsEnabled = nearbyAlertsEnabled,
+                soundVibrationEnabled = soundVibrationEnabled,
+                onDismiss = { activeSheet = null },
+                onToggleNotifications = { MeshStore.setNotificationsEnabled(it) },
+                onToggleMentions = { MeshStore.setMentionAlertsEnabled(it) },
+                onToggleNearby = { MeshStore.setNearbyPeerAlertsEnabled(it) },
+                onToggleSoundVibration = { MeshStore.setSoundVibrationEnabled(it) },
             )
         }
-        SettingsModalType.APPEARANCE -> {
-            AppearanceSettingsModal(
-                controller = controller,
-                onDismiss = { activeModal = null },
+
+        SettingsSubSheet.APPEARANCE -> {
+            AppearanceSettingsBottomSheet(
+                themeMode = themeMode,
+                accentHex = accentHex,
+                compactMode = compactMode,
+                hapticFeedback = hapticFeedback,
+                onDismiss = { activeSheet = null },
+                onSelectTheme = { MeshStore.setThemeMode(it) },
+                onSelectAccent = { MeshStore.setAccentHex(it) },
+                onToggleCompact = { MeshStore.setCompactMode(it) },
+                onToggleHaptics = { MeshStore.setHapticFeedbackEnabled(it) },
             )
         }
+
+        SettingsSubSheet.ABOUT -> {
+            AboutCypherSheet(onDismiss = { activeSheet = null })
+        }
+
         null -> Unit
     }
 }
 
 @Composable
-private fun SettingsCardRow(
-    spec: SettingsMenuRowSpec,
+private fun SettingsMenuRow(
+    spec: SettingsCategorySpec,
 ) {
+    val palette = CypherTheme.colors
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = spec.onClick)
-            .padding(horizontal = 16.dp, vertical = 14.5.dp)
-            .testTag("settings_row_${spec.id}"),
+            .padding(horizontal = 16.dp, vertical = 15.dp)
+            .testTag(spec.testTag),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .clip(CircleShape)
-                .background(Color(0xFF22253A))
-                .border(1.dp, Color(0xFF2E324D), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = spec.icon,
-                contentDescription = null,
-                tint = Color(0xFFD0D5DD),
-                modifier = Modifier.size(20.dp),
-            )
-        }
-
-        Spacer(modifier = Modifier.width(14.dp))
-
-        Column(
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text(
-                text = spec.title,
-                color = Color.White,
-                fontSize = 15.5.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = spec.subtitle,
-                color = Color(0xFF8E93AD),
-                fontSize = 12.5.sp,
-            )
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF22253A))
+                    .border(1.dp, palette.borderSubtle, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = spec.icon,
+                    contentDescription = spec.title,
+                    tint = palette.textPrimary.copy(alpha = 0.90f),
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = spec.title,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.5.sp,
+                    ),
+                    color = palette.textPrimary,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = spec.subtitle,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 12.5.sp,
+                    ),
+                    color = palette.textSecondary,
+                )
+            }
         }
 
         Icon(
-            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
             contentDescription = null,
-            tint = Color(0xFF8E93AD),
+            tint = palette.textMuted,
             modifier = Modifier.size(20.dp),
         )
     }
@@ -334,482 +442,713 @@ private fun SettingsCardRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ProfileSettingsModal(
-    controller: MeshController,
+private fun ProfileSettingsBottomSheet(
+    nickname: String,
+    statusBio: String,
+    localIdHex: String,
+    localFingerprintHex: String,
     onDismiss: () -> Unit,
+    onSaveNickname: (String, String) -> Unit,
+    onRotateIdentity: () -> Unit,
 ) {
-    val currentNick by controller.nickname.collectAsState()
-    val myPeerId by controller.myPeerIdHex.collectAsState()
-    var editedNick by remember(currentNick) { mutableStateOf(currentNick) }
+    val context = LocalContext.current
+    val palette = CypherTheme.colors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var editNick by remember(nickname) { mutableStateOf(nickname) }
+    var editBio by remember(statusBio) { mutableStateOf(statusBio) }
+    var copiedFp by remember { mutableStateOf(false) }
+
+    val displayFp = remember(localIdHex, localFingerprintHex) {
+        localFingerprintHex.ifBlank {
+            localIdHex.uppercase()
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF151726),
-        contentColor = Color.White,
+        containerColor = palette.surfaceElevated,
+        contentColor = palette.textPrimary,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text(
-                text = "Profile & Ephemeral Identity",
-                color = Color.White,
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Your nickname is broadcasted to nearby Bluetooth mesh peers.",
-                color = Color(0xFF8E93AD),
-                fontSize = 13.5.sp,
-            )
-
-            Spacer(modifier = Modifier.height(14.dp))
-
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(46.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF1E2135))
-                        .border(1.dp, Color(0xFF2D3250), RoundedCornerShape(14.dp))
-                        .padding(horizontal = 14.dp),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    BasicTextField(
-                        value = editedNick,
-                        onValueChange = { editedNick = it },
-                        singleLine = true,
-                        textStyle = TextStyle(color = Color.White, fontSize = 15.sp),
-                        cursorBrush = SolidColor(Color(0xFF8B5CF6)),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .height(46.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(
-                            Brush.horizontalGradient(
-                                listOf(Color(0xFF8352FD), Color(0xFF6938EF)),
-                            )
-                        )
-                        .clickable {
-                            controller.updateNickname(editedNick)
-                            onDismiss()
-                        }
-                        .padding(horizontal = 18.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
+                PeerAvatar(
+                    peerKeyHex = localIdHex.ifEmpty { editNick },
+                    nickname = editNick,
+                    size = 56.dp,
+                    connected = true,
+                    sessionEstablished = true,
+                )
+                Column {
                     Text(
-                        text = "Save",
-                        color = Color.White,
-                        fontSize = 14.5.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        text = "Profile & Ephemeral Identity",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = palette.textPrimary,
+                    )
+                    Text(
+                        text = "Ed25519 / Noise_XX_25519_ChaChaPoly_BLAKE2s",
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = GeistMono),
+                        color = palette.textSecondary,
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Column(
+            OutlinedTextField(
+                value = editNick,
+                onValueChange = { editNick = it.take(24) },
+                singleLine = true,
+                label = { Text("Nickname") },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = palette.accent,
+                    unfocusedBorderColor = palette.borderSubtle,
+                    focusedTextColor = palette.textPrimary,
+                    unfocusedTextColor = palette.textPrimary,
+                ),
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF1B1E30))
+                    .testTag("profile_nickname_input"),
+            )
+
+            OutlinedTextField(
+                value = editBio,
+                onValueChange = { editBio = it.take(80) },
+                singleLine = true,
+                label = { Text("Mesh Status Note") },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = palette.accent,
+                    unfocusedBorderColor = palette.borderSubtle,
+                    focusedTextColor = palette.textPrimary,
+                    unfocusedTextColor = palette.textPrimary,
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(palette.surface)
+                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(14.dp))
                     .padding(14.dp),
             ) {
-                Text(
-                    text = "Ephemeral Peer ID",
-                    color = Color(0xFF8E93AD),
-                    fontSize = 12.sp,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = myPeerId.ifBlank { "3501df1fc3eb113f" },
-                    color = Color.White,
-                    fontSize = 13.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Medium,
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Identity Fingerprint (${if (localIdHex.isNotBlank()) "Peer #${localIdHex.take(8)}" else "Local Seed"})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary,
+                    )
+                    Text(
+                        text = displayFp.chunked(4).joinToString(" "),
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = GeistMono),
+                        color = palette.textPrimary,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("cipher_fp", displayFp))
+                                copiedFp = true
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Icon(
+                                imageVector = if (copiedFp) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (copiedFp) "Copied" else "Copy")
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                val share = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, "Cipher Mesh Identity (@$editNick): $displayFp")
+                                }
+                                context.startActivity(Intent.createChooser(share, "Share Identity"))
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Icon(imageVector = Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Share")
+                        }
+
+                        OutlinedButton(
+                            onClick = onRotateIdentity,
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Icon(imageVector = Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Rotate ID")
+                        }
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Button(
+                onClick = { onSaveNickname(editNick, editBio) },
+                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("save_profile_button"),
+            ) {
+                Text("Save Profile", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PrivacySecurityModal(
+private fun PrivacySecurityBottomSheet(
+    screenSecurity: Boolean,
+    autoDeleteTimer: AutoDeleteTimer,
+    blockedPeers: Set<String>,
     onDismiss: () -> Unit,
+    onToggleScreenSecurity: (Boolean) -> Unit,
+    onSelectAutoDelete: (AutoDeleteTimer) -> Unit,
+    onUnblockPeer: (String) -> Unit,
     onOpenVerification: () -> Unit,
     onOpenPanicMode: () -> Unit,
 ) {
+    val palette = CypherTheme.colors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF151726),
-        contentColor = Color.White,
+        containerColor = palette.surfaceElevated,
+        contentColor = palette.textPrimary,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
                 text = "Privacy & Security",
-                color = Color.White,
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "End-to-end Noise XX encryption and emergency data wipe.",
-                color = Color(0xFF8E93AD),
-                fontSize = 13.5.sp,
+                style = MaterialTheme.typography.headlineMedium,
+                color = palette.textPrimary,
             )
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF1C2034))
-                    .border(1.dp, Color(0xFF2B314E), RoundedCornerShape(16.dp))
-                    .clickable(onClick = onOpenVerification)
-                    .padding(16.dp),
+            Surface(
+                onClick = onOpenVerification,
+                shape = RoundedCornerShape(14.dp),
+                color = palette.surface,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Column {
-                    Text(
-                        text = "Security Verification",
-                        color = Color.White,
-                        fontSize = 15.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "Inspect and compare 16-word hex fingerprints",
-                        color = Color(0xFF8E93AD),
-                        fontSize = 12.5.sp,
-                    )
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = palette.success)
+                        Column {
+                            Text("Security Verification", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                            Text("Verify peer fingerprints & QR codes", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
+                        }
+                    }
+                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = palette.textMuted)
                 }
             }
 
-            Box(
+            ToggleSettingCard(
+                title = "Block Screenshots (FLAG_SECURE)",
+                subtitle = "Prevent screen capture and recents previews",
+                checked = screenSecurity,
+                onCheckedChange = onToggleScreenSecurity,
+            )
+
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF2B1722))
-                    .border(1.dp, Color(0xFF562538), RoundedCornerShape(16.dp))
-                    .clickable(onClick = onOpenPanicMode)
-                    .padding(16.dp),
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(palette.surface)
+                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(14.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column {
-                    Text(
-                        text = "Panic Mode",
-                        color = Color(0xFFF87171),
-                        fontSize = 15.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "Triple-tap the Cipher logo or open Panic Mode to wipe all data",
-                        color = Color(0xFFE5A4B4),
-                        fontSize = 12.5.sp,
-                    )
+                Text(
+                    text = "Disappearing Messages Timer (${autoDeleteTimer.label})",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = palette.textPrimary,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AutoDeleteTimer.entries.forEach { timer ->
+                        val selected = timer == autoDeleteTimer
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (selected) palette.accent else palette.surfaceElevated)
+                                .clickable { onSelectAutoDelete(timer) }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = timer.label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (selected) Color.White else palette.textSecondary,
+                            )
+                        }
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            if (blockedPeers.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(palette.surface)
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text("Blocked Peers (${blockedPeers.size})", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                    blockedPeers.forEach { peerHex ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(peerHex.take(16), style = MaterialTheme.typography.bodySmall.copy(fontFamily = GeistMono), color = palette.textSecondary)
+                            OutlinedButton(onClick = { onUnblockPeer(peerHex) }) {
+                                Icon(Icons.Rounded.Block, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Unblock")
+                            }
+                        }
+                    }
+                }
+            }
+
+            Surface(
+                onClick = onOpenPanicMode,
+                shape = RoundedCornerShape(14.dp),
+                color = palette.dangerSurface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, palette.danger.copy(alpha = 0.45f), RoundedCornerShape(14.dp)),
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = palette.danger)
+                        Column {
+                            Text("Panic Mode", style = MaterialTheme.typography.titleSmall, color = palette.danger)
+                            Text("Instantly wipe all local data, chats, and keys", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
+                        }
+                    }
+                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = palette.danger)
+                }
+            }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MeshConnectivityModal(
-    controller: MeshController,
+private fun MeshConnectivityBottomSheet(
+    autoRelay: Boolean,
+    storeAndForward: Boolean,
+    coverTraffic: Boolean,
+    maxTtlHops: Int,
+    bleScanMode: String,
+    pendingOutboxCount: Int,
+    isBatteryExempt: Boolean,
     onDismiss: () -> Unit,
-    onOpenMeshTopology: () -> Unit,
+    onToggleAutoRelay: (Boolean) -> Unit,
+    onToggleStoreAndForward: (Boolean) -> Unit,
+    onToggleCoverTraffic: (Boolean) -> Unit,
+    onUpdateMaxHops: (Int) -> Unit,
+    onSelectScanMode: (String) -> Unit,
+    onOpenTopology: () -> Unit,
+    onRequestBatteryExemption: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val bgEnabled by controller.store.backgroundServiceEnabled.collectAsState()
-    var isBatteryExempt by remember {
-        mutableStateOf(BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context))
-    }
+    val palette = CypherTheme.colors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var sliderVal by remember(maxTtlHops) { mutableFloatStateOf(maxTtlHops.toFloat()) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF151726),
-        contentColor = Color.White,
+        containerColor = palette.surfaceElevated,
+        contentColor = palette.textPrimary,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
                 text = "Mesh & Connectivity",
-                color = Color.White,
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "Multi-hop Bluetooth Low Energy relay (up to 7 hops).",
-                color = Color(0xFF8E93AD),
-                fontSize = 13.5.sp,
+                style = MaterialTheme.typography.headlineMedium,
+                color = palette.textPrimary,
             )
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(
-                        Brush.horizontalGradient(
-                            listOf(Color(0xFF8352FD), Color(0xFF6938EF)),
-                        )
-                    )
-                    .clickable(onClick = onOpenMeshTopology)
-                    .padding(16.dp),
-                contentAlignment = Alignment.Center,
+            Surface(
+                onClick = onOpenTopology,
+                shape = RoundedCornerShape(14.dp),
+                color = palette.surface,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(
-                    text = "Open Mesh Network Topology",
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(Icons.Rounded.Hub, contentDescription = null, tint = palette.accentLight)
+                        Column {
+                            Text("Live Mesh Network Graph", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                            Text("View connected peers, hops, and signal strength", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
+                        }
+                    }
+                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = palette.textMuted)
+                }
             }
 
-            Row(
+            ToggleSettingCard(
+                title = "Multi-Hop Auto-Relay",
+                subtitle = "Forward encrypted frames for nearby peers",
+                checked = autoRelay,
+                onCheckedChange = onToggleAutoRelay,
+            )
+
+            ToggleSettingCard(
+                title = "Store & Forward Cache ($pendingOutboxCount queued)",
+                subtitle = "Buffer encrypted messages in Room DB for offline peers",
+                checked = storeAndForward,
+                onCheckedChange = onToggleStoreAndForward,
+            )
+
+            ToggleSettingCard(
+                title = "Chaff / Cover Traffic",
+                subtitle = "Periodic dummy packets to resist traffic analysis",
+                checked = coverTraffic,
+                onCheckedChange = onToggleCoverTraffic,
+            )
+
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF1C2034))
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(palette.surface)
+                    .padding(14.dp),
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Background Mesh Relay",
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = "Keep BLE scanning and packet forwarding active",
-                        color = Color(0xFF8E93AD),
-                        fontSize = 12.5.sp,
-                    )
-                }
-                Switch(
-                    checked = bgEnabled,
-                    onCheckedChange = { controller.setBackgroundServiceEnabled(it) },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color(0xFF7C4DFF),
+                Text(
+                    text = "Max Relay Hop Limit (TTL): ${sliderVal.toInt()} hops",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = palette.textPrimary,
+                )
+                Slider(
+                    value = sliderVal,
+                    onValueChange = {
+                        sliderVal = it
+                        onUpdateMaxHops(it.toInt())
+                    },
+                    valueRange = 1f..7f,
+                    steps = 5,
+                    colors = SliderDefaults.colors(
+                        thumbColor = palette.accentLight,
+                        activeTrackColor = palette.accent,
                     ),
                 )
             }
 
-            Row(
+            Surface(
+                onClick = onRequestBatteryExemption,
+                shape = RoundedCornerShape(14.dp),
+                color = palette.surface,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF1C2034))
-                    .clickable {
-                        BatteryOptimizationHelper.launchExemptionRequest(context)
-                        isBatteryExempt = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)
-                    }
-                    .padding(16.dp)
-                    .testTag("settings_battery_optimization_row"),
-                verticalAlignment = Alignment.CenterVertically,
+                    .testTag("settings_battery_exemption_button"),
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.BatteryChargingFull,
-                    contentDescription = null,
-                    tint = if (isBatteryExempt) Color(0xFF4ADE80) else Color(0xFFA78BFA),
-                    modifier = Modifier.size(22.dp),
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (isBatteryExempt) {
-                            "Unrestricted Background Battery Active"
-                        } else {
-                            "Disable Battery Optimization"
-                        },
-                        color = Color.White,
-                        fontSize = 14.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = "Prevent Android from throttling multi-hop BLE relays",
-                        color = Color(0xFF8E93AD),
-                        fontSize = 12.sp,
-                    )
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.BatterySaver,
+                            contentDescription = null,
+                            tint = if (isBatteryExempt) palette.success else palette.warning,
+                        )
+                        Column {
+                            Text(
+                                text = if (isBatteryExempt) "Battery Exemption Active" else "Disable Battery Optimization",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = palette.textPrimary,
+                            )
+                            Text(
+                                text = "Keep background BLE mesh relay running reliably",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.textSecondary,
+                            )
+                        }
+                    }
+                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = palette.textMuted)
                 }
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NotificationsSettingsModal(
-    controller: MeshController,
+private fun NotificationsSettingsBottomSheet(
+    notificationsEnabled: Boolean,
+    mentionAlertsEnabled: Boolean,
+    nearbyAlertsEnabled: Boolean,
+    soundVibrationEnabled: Boolean,
     onDismiss: () -> Unit,
+    onToggleNotifications: (Boolean) -> Unit,
+    onToggleMentions: (Boolean) -> Unit,
+    onToggleNearby: (Boolean) -> Unit,
+    onToggleSoundVibration: (Boolean) -> Unit,
 ) {
-    val bgEnabled by controller.store.backgroundServiceEnabled.collectAsState()
-    val mutedSet by controller.store.mutedConversations.collectAsState()
+    val palette = CypherTheme.colors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF151726),
-        contentColor = Color.White,
+        containerColor = palette.surfaceElevated,
+        contentColor = palette.textPrimary,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
                 text = "Notifications",
-                color = Color.White,
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.headlineMedium,
+                color = palette.textPrimary,
             )
-            Text(
-                text = "Direct messages, @mentions, and nearby mesh alerts.",
-                color = Color(0xFF8E93AD),
-                fontSize = 13.5.sp,
+            ToggleSettingCard(
+                title = "Direct Message Notifications",
+                subtitle = "Notify when encrypted messages arrive over BLE",
+                checked = notificationsEnabled,
+                onCheckedChange = onToggleNotifications,
             )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF1C2034))
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Persistent Mesh Notification",
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = "${mutedSet.size} conversation(s) currently muted",
-                        color = Color(0xFF8E93AD),
-                        fontSize = 12.5.sp,
-                    )
-                }
-                Switch(
-                    checked = bgEnabled,
-                    onCheckedChange = { controller.setBackgroundServiceEnabled(it) },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color(0xFF7C4DFF),
-                    ),
-                )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
+            ToggleSettingCard(
+                title = "@Mention Alerts",
+                subtitle = "Alert when someone mentions your @nickname in a channel",
+                checked = mentionAlertsEnabled,
+                onCheckedChange = onToggleMentions,
+            )
+            ToggleSettingCard(
+                title = "Nearby Peer Discovery Alerts",
+                subtitle = "Subtle alert when a new peer enters Bluetooth range",
+                checked = nearbyAlertsEnabled,
+                onCheckedChange = onToggleNearby,
+            )
+            ToggleSettingCard(
+                title = "Sound & Haptic Vibration",
+                subtitle = "Vibrate on incoming mesh messages",
+                checked = soundVibrationEnabled,
+                onCheckedChange = onToggleSoundVibration,
+            )
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AppearanceSettingsModal(
-    controller: MeshController,
+private fun AppearanceSettingsBottomSheet(
+    themeMode: AppThemeMode,
+    accentHex: String,
+    compactMode: Boolean,
+    hapticFeedback: Boolean,
     onDismiss: () -> Unit,
+    onSelectTheme: (AppThemeMode) -> Unit,
+    onSelectAccent: (String) -> Unit,
+    onToggleCompact: (Boolean) -> Unit,
+    onToggleHaptics: (Boolean) -> Unit,
 ) {
-    val currentTheme by controller.store.themePreference.collectAsState()
+    val palette = CypherTheme.colors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val accents = listOf("#8352FD", "#6938EF", "#3B82F6", "#10B981", "#F43F5E")
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF151726),
-        contentColor = Color.White,
+        containerColor = palette.surfaceElevated,
+        contentColor = palette.textPrimary,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
                 text = "Appearance",
-                color = Color.White,
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "Cipher is crafted for high-contrast dark mode OLED clarity.",
-                color = Color(0xFF8E93AD),
-                fontSize = 13.5.sp,
+                style = MaterialTheme.typography.headlineMedium,
+                color = palette.textPrimary,
             )
 
-            ThemePreference.entries.forEach { pref ->
-                val isSelected = pref == currentTheme
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (isSelected) Color(0xFF282048) else Color(0xFF1C2034))
-                        .border(
-                            width = 1.dp,
-                            color = if (isSelected) Color(0xFF8B5CF6) else Color(0xFF282D46),
-                            shape = RoundedCornerShape(14.dp),
-                        )
-                        .clickable {
-                            controller.setThemePreference(pref)
-                            onDismiss()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(palette.surface)
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Theme Mode", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                AppThemeMode.entries.forEach { mode ->
+                    val selected = mode == themeMode
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (selected) palette.accentSubtle else Color.Transparent)
+                            .clickable { onSelectTheme(mode) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(mode.label, color = palette.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                        if (selected) {
+                            Icon(Icons.Rounded.Check, contentDescription = null, tint = palette.accentLight)
                         }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = pref.name.lowercase().replaceFirstChar { it.uppercase() },
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    if (isSelected) {
-                        Text(
-                            text = "Active",
-                            color = Color(0xFFA78BFA),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(palette.surface)
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("Accent Color", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    accents.forEach { hex ->
+                        val col = Color(android.graphics.Color.parseColor(hex))
+                        val isSelected = accentHex.equals(hex, ignoreCase = true)
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(col)
+                                .border(
+                                    width = if (isSelected) 2.5.dp else 1.dp,
+                                    color = if (isSelected) Color.White else Color.Transparent,
+                                    shape = CircleShape,
+                                )
+                                .clickable { onSelectAccent(hex) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            ToggleSettingCard(
+                title = "Compact Message Density",
+                subtitle = "Fit more messages and channels on screen",
+                checked = compactMode,
+                onCheckedChange = onToggleCompact,
+            )
+
+            ToggleSettingCard(
+                title = "Micro-Interaction Haptics",
+                subtitle = "Subtle tactile feedback on actions and gestures",
+                checked = hapticFeedback,
+                onCheckedChange = onToggleHaptics,
+            )
         }
+    }
+}
+
+@Composable
+private fun ToggleSettingCard(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    val palette = CypherTheme.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(palette.surface)
+            .border(1.dp, palette.borderSubtle, RoundedCornerShape(14.dp))
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+            Text(text = subtitle, style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = palette.accent,
+                uncheckedThumbColor = palette.textSecondary,
+                uncheckedTrackColor = palette.bgPrimary,
+            ),
+        )
     }
 }

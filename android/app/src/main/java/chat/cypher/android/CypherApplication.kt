@@ -1,14 +1,17 @@
 package chat.cypher.android
 
 import android.app.Application
+import chat.cypher.android.core.CypherBridge
 import chat.cypher.android.core.MeshController
+import chat.cypher.android.core.MeshStore
 
 class CypherApplication : Application() {
-    lateinit var meshController: MeshController
-        private set
+    val meshController: MeshController = MeshController
 
     override fun onCreate() {
         super.onCreate()
-        meshController = MeshController(applicationContext)
+        MeshStore.attachDatabase(this)
+        MeshStore.loadOrCreateSeed(this)
+        CypherBridge.ensureLoaded()
     }
 }

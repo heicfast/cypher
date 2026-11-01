@@ -6,21 +6,23 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Fingerprint
-import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Hub
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Fingerprint
+import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Hub
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,35 +38,75 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import chat.cypher.android.core.CypherBridge
 import chat.cypher.android.core.MeshController
-import chat.cypher.android.ui.theme.CypherMonoFontFamily
-import chat.cypher.android.ui.theme.LocalCypherPalette
+import chat.cypher.android.ui.theme.CypherTheme
+import chat.cypher.android.ui.theme.GeistMono
 
-/**
- * About Cipher & Protocol Overview Sheet matching the 7 core pillars shown in the left panel
- * of the design specification:
- * - Offline Communication (Works without internet)
- * - End-to-End Encryption (Keep your messages private)
- * - Mesh Networking (Multi-hop relay up to 7 hops)
- * - Local Channels (Nearby group conversations)
- * - No Tracking (No servers, accounts, or data collection)
- * - Ephemeral Identity (New peer ID generated regularly)
- * - Panic Mode (Triple-tap to instantly clear data)
- */
+private data class CipherFeaturePillar(
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AboutCypherSheet(
-    coreVersion: String,
     onDismiss: () -> Unit,
 ) {
-    val palette = LocalCypherPalette.current
+    val palette = CypherTheme.colors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val version = if (CypherBridge.isLoaded) {
+        runCatching { CypherBridge.nativeVersion() }.getOrDefault("1.0.0")
+    } else {
+        "1.0.0"
+    }
+
+    val pillars = listOf(
+        CipherFeaturePillar(
+            title = "Offline Communication",
+            subtitle = "Works without internet over Bluetooth Low Energy",
+            icon = Icons.Rounded.Bluetooth,
+        ),
+        CipherFeaturePillar(
+            title = "End-to-End Encryption",
+            subtitle = "Noise_XX_25519_ChaChaPoly_BLAKE2s & PBKDF2 AES-256-GCM",
+            icon = Icons.Rounded.Lock,
+        ),
+        CipherFeaturePillar(
+            title = "Mesh Networking",
+            subtitle = "Multi-hop relay (up to 7 hops) with Dijkstra route planning",
+            icon = Icons.Rounded.Hub,
+        ),
+        CipherFeaturePillar(
+            title = "Local Channels",
+            subtitle = "GPS geohash channels & topic channels with zero servers",
+            icon = Icons.Rounded.Groups,
+        ),
+        CipherFeaturePillar(
+            title = "No Tracking",
+            subtitle = "No servers, accounts, phone numbers, or data collection",
+            icon = Icons.Rounded.VisibilityOff,
+        ),
+        CipherFeaturePillar(
+            title = "Ephemeral Identity",
+            subtitle = "Android Keystore AES-GCM protected identity seed",
+            icon = Icons.Rounded.Fingerprint,
+        ),
+        CipherFeaturePillar(
+            title = "Panic Mode",
+            subtitle = "Triple-tap logo to instantly wipe Room DB, chats, and keys",
+            icon = Icons.Rounded.Bolt,
+        ),
+    )
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = palette.surface0,
+        containerColor = palette.bgSecondary,
         contentColor = palette.textPrimary,
     ) {
         Column(
@@ -72,91 +114,107 @@ fun AboutCypherSheet(
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(bottom = 36.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+            CipherAppBadge(size = 72.dp)
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "Cipher",
+                style = MaterialTheme.typography.displayMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 30.sp,
+                ),
+                color = palette.textPrimary,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Offline Mesh Messenger",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 15.sp,
+                ),
+                color = palette.accentLight,
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "Private, secure, and internet-free messaging\nfor real-world communication.",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                ),
+                color = palette.textSecondary,
+                textAlign = TextAlign.Center,
+            )
+
+            Spacer(modifier = Modifier.height(22.dp))
+
+            Column(
                 modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    CipherChainLogo(size = 36.dp)
-                    Column {
-                        Text(
-                            text = "Cipher",
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = palette.textPrimary,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = "Offline Mesh Messenger",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.textSecondary,
-                        )
+                pillars.forEach { pillar ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(palette.surface)
+                            .border(1.dp, palette.borderSubtle, RoundedCornerShape(16.dp))
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(Color(0xFF422A8E), Color(0xFF281A5C)),
+                                    ),
+                                )
+                                .border(
+                                    1.dp,
+                                    palette.accentLight.copy(alpha = 0.40f),
+                                    RoundedCornerShape(12.dp),
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = pillar.icon,
+                                contentDescription = pillar.title,
+                                tint = Color(0xFFC4B5FD),
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = pillar.title,
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                ),
+                                color = palette.textPrimary,
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = pillar.subtitle,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontSize = 12.5.sp,
+                                ),
+                                color = palette.textSecondary,
+                            )
+                        }
                     }
-                }
-                Surface(
-                    color = palette.accentSoft,
-                    shape = RoundedCornerShape(50),
-                ) {
-                    Text(
-                        text = "v$coreVersion • Open Source",
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = CypherMonoFontFamily),
-                        color = palette.accentSecondary,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    )
                 }
             }
 
-            Text(
-                text = "Private, secure, and internet-free messaging for real-world communication.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = palette.textSecondary,
-            )
+            Spacer(modifier = Modifier.height(16.dp))
 
-            GuideSectionCard(
-                icon = Icons.Filled.Bluetooth,
-                title = "Offline Communication",
-                body = "Works without internet — connects directly over Bluetooth Low Energy.",
-            )
-            GuideSectionCard(
-                icon = Icons.Filled.Lock,
-                title = "End-to-End Encryption",
-                body = "Keep your messages private with Noise XX mutual handshakes and ChaCha20-Poly1305.",
-            )
-            GuideSectionCard(
-                icon = Icons.Filled.Hub,
-                title = "Mesh Networking",
-                body = "Multi-hop relay (up to 7 hops) extends range automatically across nearby peers.",
-            )
-            GuideSectionCard(
-                icon = Icons.Filled.Groups,
-                title = "Local Channels",
-                body = "Nearby group conversations over broadcast mesh channels without servers.",
-            )
-            GuideSectionCard(
-                icon = Icons.Filled.VisibilityOff,
-                title = "No Tracking",
-                body = "No servers, accounts, phone numbers, or telemetry data collection.",
-            )
-            GuideSectionCard(
-                icon = Icons.Filled.Fingerprint,
-                title = "Ephemeral Identity",
-                body = "Cryptographic peer identity stored locally in Android Keystore.",
-            )
-            GuideSectionCard(
-                icon = Icons.Filled.Bolt,
-                title = "Panic Mode",
-                body = "Triple-tap the Cipher logo on the home screen to instantly clear all data, chats, and keys.",
-            )
-
-            // Slash Commands Reference
+            // Slash Commands Reference Card
             Surface(
-                color = palette.surface1,
+                color = palette.surface,
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -164,20 +222,20 @@ fun AboutCypherSheet(
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Terminal,
+                            imageVector = Icons.Rounded.Terminal,
                             contentDescription = null,
-                            tint = palette.accentSecondary,
+                            tint = palette.accentLight,
                             modifier = Modifier.size(18.dp),
                         )
                         Text(
-                            text = "Slash Commands",
+                            text = "IRC Slash Commands",
                             style = MaterialTheme.typography.titleSmall,
                             color = palette.textPrimary,
                         )
@@ -190,75 +248,31 @@ fun AboutCypherSheet(
                         ) {
                             Text(
                                 text = spec.syntax,
-                                style = MaterialTheme.typography.labelMedium.copy(fontFamily = CypherMonoFontFamily),
-                                color = palette.accentSecondary,
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = GeistMono),
+                                color = palette.accentLight,
                                 fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.weight(0.38f),
+                                modifier = Modifier.weight(0.42f),
                             )
                             Text(
                                 text = spec.description,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = palette.textSecondary,
-                                modifier = Modifier.weight(0.62f),
+                                modifier = Modifier.weight(0.58f),
                             )
                         }
                     }
                 }
             }
-        }
-    }
-}
 
-@Composable
-private fun GuideSectionCard(
-    icon: ImageVector,
-    title: String,
-    body: String,
-) {
-    val palette = LocalCypherPalette.current
-    Surface(
-        color = palette.surface1,
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, palette.borderSubtle, RoundedCornerShape(16.dp)),
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(Color(0xFF6D28D9), Color(0xFF4C1D95)),
-                        ),
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = palette.textPrimary,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = body,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.textSecondary,
-                )
-            }
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Text(
+                text = "Version $version • Pure Offline BLE Mesh • Open Source",
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontFamily = GeistMono,
+                ),
+                color = palette.textMuted,
+            )
         }
     }
 }

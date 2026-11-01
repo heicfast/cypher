@@ -17,417 +17,531 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import chat.cypher.android.core.PeerUiModel
-import chat.cypher.android.ui.theme.LocalCypherPalette
+import chat.cypher.android.core.MeshController
+import chat.cypher.android.core.MeshGraphService
+import chat.cypher.android.core.MeshStore
+import chat.cypher.android.core.PeerEntry
+import chat.cypher.android.ui.theme.CypherTheme
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * Pixel-exact Screen 6: Mesh Network Topology Screen (`screen6_mesh.png`).
- * Displays the radial multi-hop mesh topology with the central "Cipher" node,
- * 6 orbiting peer nodes, glowing relay links, and bottom telemetry cards
- * ("7 Peers Nearby", "3 Hops (Max 7)", "Good Signal").
+ * Live BLE Mesh Network Topology Screen powered by real peers and MeshGraphService edges.
  */
 @Composable
 fun MeshNetworkScreen(
-    peers: List<PeerUiModel>,
-    isMeshRunning: Boolean,
     onBack: () -> Unit,
     onSelectPeer: (String) -> Unit = {},
-    onAnnouncePulse: () -> Unit = {},
 ) {
-    val palette = LocalCypherPalette.current
     BackHandler(onBack = onBack)
 
-    val nearbyCount = if (peers.isNotEmpty()) peers.size else 7
-    val maxHops = if (peers.isNotEmpty()) {
+    val palette = CypherTheme.colors
+    val peers by MeshStore.peers.collectAsState()
+    val maxTtlHops by MeshStore.maxTtlHops.collectAsState()
+    val graphSnapshot by MeshGraphService.graphState.collectAsState()
+
+    val nearbyCount = peers.size
+    val maxObservedHops = if (peers.isNotEmpty()) {
         peers.maxOf { it.hops }.coerceIn(1, 7)
     } else {
-        3
+        0
+    }
+    val bestRssi = peers.mapNotNull { it.rssi }.maxOrNull()
+    val signalQualityLabel = when {
+        peers.isEmpty() -> "Scanning"
+        bestRssi == null -> "Good"
+        bestRssi >= -65 -> "Strong"
+        bestRssi >= -78 -> "Good"
+        else -> "Fair"
+    }
+    val isConnected = peers.any { it.connected }
+    val statusBadgeLabel = when {
+        isConnected -> "Connected"
+        peers.isNotEmpty() -> "Discovered"
+        else -> "Scanning BLE"
+    }
+    val statusBadgeColor = if (isConnected || peers.isNotEmpty()) {
+        palette.success
+    } else {
+        palette.accentLight
     }
 
-    val infinite = rememberInfiniteTransition(label = "mesh_radar")
-    val glowPulse by infinite.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "glow_pulse",
-    )
-
-    // 6 canonical angles matching screen6_mesh.png (top, top-right, bottom-right, bottom, bottom-left, top-left)
-    val nodeAnglesDeg = listOf(-90.0, -28.0, 28.0, 90.0, 152.0, -152.0)
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
-            .windowInsetsPadding(WindowInsets.safeDrawing),
-        contentAlignment = Alignment.TopCenter,
-    ) {
+    Scaffold(
+        containerColor = palette.bgPrimary,
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .widthIn(max = 520.dp)
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color(0xFF131524), palette.bgPrimary),
+                    ),
+                )
+                .padding(innerPadding)
+                .padding(horizontal = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            // Top Bar + Connected Pill
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
+            // Top Bar: Back arrow + Centered "Mesh Network" title + Refresh button
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
             ) {
-                Box(
+                IconButton(
+                    onClick = onBack,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp),
+                        .align(Alignment.CenterStart)
+                        .size(40.dp)
+                        .testTag("mesh_network_back_button"),
                 ) {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .testTag("mesh_network_back_button"),
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp),
-                        )
-                    }
-
-                    Text(
-                        text = "Mesh Network",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                        ),
-                        color = Color.White,
-                        modifier = Modifier.align(Alignment.Center),
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Back",
+                        tint = palette.textPrimary,
                     )
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Mesh Network",
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 19.sp,
+                    ),
+                    color = palette.textPrimary,
+                    modifier = Modifier.align(Alignment.Center),
+                )
 
-                ConnectedStatusPill(isConnected = isMeshRunning || nearbyCount > 0)
+                IconButton(
+                    onClick = {
+                        MeshController.announceNow()
+                        MeshController.pingAll()
+                    },
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .size(40.dp)
+                        .testTag("mesh_network_refresh_button"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Refresh,
+                        contentDescription = "Broadcast presence and ping mesh",
+                        tint = palette.accentLight,
+                    )
+                }
             }
 
-            // Center Radial Mesh Topology Graph
+            // Status Pill
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(statusBadgeColor.copy(alpha = 0.16f))
+                    .border(1.dp, statusBadgeColor.copy(alpha = 0.40f), RoundedCornerShape(50))
+                    .clickable {
+                        MeshController.announceNow()
+                        MeshController.pingAll()
+                    }
+                    .padding(horizontal = 18.dp, vertical = 6.dp)
+                    .testTag("mesh_connected_pill"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = statusBadgeLabel,
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                    ),
+                    color = statusBadgeColor,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Radial Mesh Topology Graph Area
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .padding(vertical = 8.dp),
+                    .weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
                 val density = LocalDensity.current
-                val graphDiameter = minOf(maxWidth, maxHeight).coerceAtMost(340.dp)
-                val orbitRadiusDp = graphDiameter * 0.37f
-                val orbitRadiusPx = with(density) { orbitRadiusDp.toPx() }
+                val minSideDp = minOf(maxWidth, maxHeight)
+                val innerOrbitRadiusDp = minSideDp * 0.25f
+                val outerOrbitRadiusDp = minSideDp * 0.38f
+                val innerOrbitPx = with(density) { innerOrbitRadiusDp.toPx() }
+                val outerOrbitPx = with(density) { outerOrbitRadiusDp.toPx() }
 
-                Box(
-                    modifier = Modifier.size(graphDiameter),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val cx = size.width / 2f
-                        val cy = size.height / 2f
-                        val centerOffset = Offset(cx, cy)
+                val transition = rememberInfiniteTransition(label = "mesh_glow")
+                val glowScale by transition.animateFloat(
+                    initialValue = 0.92f,
+                    targetValue = 1.08f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(2400, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                    label = "glow_scale",
+                )
 
-                        // Soft radial violet aura behind the mesh
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                colors = listOf(
-                                    Color(0xFF6D28D9).copy(alpha = 0.38f),
-                                    Color(0xFF311B6E).copy(alpha = 0.16f),
-                                    Color.Transparent,
-                                ),
-                                center = centerOffset,
-                                radius = size.minDimension * 0.48f * glowPulse,
+                val visiblePeers: List<PeerEntry> = peers.take(12)
+                val peerPositions = visiblePeers.mapIndexed { idx, peer ->
+                    val angleDeg = -90.0 + (360.0 / visiblePeers.size.coerceAtLeast(1)) * idx
+                    val rad = Math.toRadians(angleDeg)
+                    val radiusPx = if (peer.hops <= 1) innerOrbitPx else outerOrbitPx
+                    val radiusDp = if (peer.hops <= 1) innerOrbitRadiusDp else outerOrbitRadiusDp
+                    Triple(peer, rad, radiusPx to radiusDp)
+                }
+                val posByPeerId = peerPositions.associate { (peer, rad, radii) ->
+                    peer.peerKeyHex to Triple(rad, radii.first, radii.second)
+                }
+
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val center = Offset(size.width / 2f, size.height / 2f)
+
+                    // Outer ambient radial glow
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                palette.accent.copy(alpha = 0.26f * glowScale),
+                                Color.Transparent,
                             ),
-                            radius = size.minDimension * 0.48f * glowPulse,
-                            center = centerOffset,
+                            center = center,
+                            radius = outerOrbitPx * 1.25f,
+                        ),
+                        radius = outerOrbitPx * 1.25f,
+                        center = center,
+                    )
+
+                    // 3 Concentric orbit rings (1-hop, 2-hop, multi-hop)
+                    listOf(0.45f, 0.72f, 1.0f).forEach { factor ->
+                        drawCircle(
+                            color = palette.accentLight.copy(alpha = 0.14f),
+                            radius = outerOrbitPx * factor,
+                            center = center,
+                            style = Stroke(width = 1.2.dp.toPx()),
                         )
+                    }
 
-                        // 3 concentric radar rings
-                        val rings = listOf(0.54f, 0.74f, 0.94f)
-                        rings.forEachIndexed { idx, factor ->
-                            drawCircle(
-                                color = Color(0xFF3E4475).copy(alpha = 0.42f - idx * 0.11f),
-                                radius = orbitRadiusPx * factor / 0.74f,
-                                center = centerOffset,
-                                style = Stroke(width = 1.2.dp.toPx()),
+                    // Inter-peer relay edges from MeshGraphService
+                    graphSnapshot.edges.forEach { edge ->
+                        val pA = posByPeerId[edge.a]
+                        val pB = posByPeerId[edge.b]
+                        if (pA != null && pB != null) {
+                            val ptA = Offset(
+                                x = center.x + (cos(pA.first) * pA.second).toFloat(),
+                                y = center.y + (sin(pA.first) * pA.second).toFloat(),
                             )
-                        }
-
-                        // Calculate orbiting node coordinates
-                        val nodePoints = nodeAnglesDeg.map { deg ->
-                            val rad = Math.toRadians(deg)
-                            Offset(
-                                x = cx + (orbitRadiusPx * cos(rad)).toFloat(),
-                                y = cy + (orbitRadiusPx * sin(rad)).toFloat(),
+                            val ptB = Offset(
+                                x = center.x + (cos(pB.first) * pB.second).toFloat(),
+                                y = center.y + (sin(pB.first) * pB.second).toFloat(),
                             )
-                        }
-
-                        // Subtle outer polygon links between adjacent orbiting peers
-                        for (i in nodePoints.indices) {
-                            val next = nodePoints[(i + 1) % nodePoints.size]
                             drawLine(
-                                color = Color(0xFF5A54A4).copy(alpha = 0.32f),
-                                start = nodePoints[i],
-                                end = next,
-                                strokeWidth = 1.2.dp.toPx(),
-                            )
-                        }
-
-                        // Glowing primary spokes from center Cipher node to each orbiting peer
-                        nodePoints.forEach { pt ->
-                            drawLine(
-                                brush = Brush.linearGradient(
-                                    colors = listOf(
-                                        Color(0xFFA78BFA).copy(alpha = 0.90f),
-                                        Color(0xFF6366F1).copy(alpha = 0.75f),
-                                    ),
-                                    start = centerOffset,
-                                    end = pt,
-                                ),
-                                start = centerOffset,
-                                end = pt,
-                                strokeWidth = 2.dp.toPx(),
+                                color = palette.accentLight.copy(alpha = if (edge.isConfirmed) 0.45f else 0.24f),
+                                start = ptA,
+                                end = ptB,
+                                strokeWidth = 1.5.dp.toPx(),
+                                pathEffect = if (edge.isConfirmed) {
+                                    null
+                                } else {
+                                    PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
+                                },
                             )
                         }
                     }
 
-                    // 6 Orbiting Peer Nodes
-                    nodeAnglesDeg.forEachIndexed { index, deg ->
-                        val rad = Math.toRadians(deg)
-                        val offsetX = (orbitRadiusPx * cos(rad)).roundToInt()
-                        val offsetY = (orbitRadiusPx * sin(rad)).roundToInt()
-                        val peerForNode = peers.getOrNull(index)
+                    // Spokes from center node to discovered peers
+                    peerPositions.forEach { (peer, rad, radii) ->
+                        val rPx = radii.first
+                        val nodeCenter = Offset(
+                            x = center.x + (cos(rad) * rPx).toFloat(),
+                            y = center.y + (sin(rad) * rPx).toFloat(),
+                        )
+                        drawLine(
+                            brush = Brush.linearGradient(
+                                colors = listOf(
+                                    palette.accentLight.copy(alpha = 0.75f),
+                                    palette.accent.copy(alpha = 0.30f),
+                                ),
+                                start = center,
+                                end = nodeCenter,
+                            ),
+                            start = center,
+                            end = nodeCenter,
+                            strokeWidth = if (peer.hops <= 1) 2.dp.toPx() else 1.4.dp.toPx(),
+                            pathEffect = if (peer.hops <= 1) {
+                                null
+                            } else {
+                                PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+                            },
+                        )
+                    }
+                }
 
+                // Discovered peer nodes
+                peerPositions.forEach { (peer, rad, radii) ->
+                    val rDp = radii.second
+                    val offsetX = with(density) { (rDp * cos(rad).toFloat()).toPx().roundToInt() }
+                    val offsetY = with(density) { (rDp * sin(rad).toFloat()).toPx().roundToInt() }
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .offset { IntOffset(offsetX, offsetY) }
+                            .clickable { onSelectPeer(peer.peerKeyHex) }
+                            .testTag("mesh_peer_node_${peer.peerKeyHex}"),
+                    ) {
                         Box(
                             modifier = Modifier
-                                .offset { IntOffset(offsetX, offsetY) }
-                                .size(48.dp)
+                                .size(44.dp)
+                                .shadow(
+                                    elevation = 10.dp,
+                                    shape = CircleShape,
+                                    ambientColor = palette.accent,
+                                    spotColor = palette.accent,
+                                )
                                 .clip(CircleShape)
                                 .background(
                                     Brush.radialGradient(
                                         colors = listOf(
-                                            Color(0xFF5D4BB8),
-                                            Color(0xFF33286E),
+                                            Color(0xFF4F3799),
+                                            Color(0xFF281E54),
                                         ),
                                     ),
                                 )
-                                .border(1.8.dp, Color(0xFF8B78E6), CircleShape)
-                                .clickable {
-                                    if (peerForNode != null) {
-                                        onSelectPeer(peerForNode.peerIdHex)
-                                    }
-                                },
+                                .border(
+                                    width = 1.5.dp,
+                                    color = if (peer.sessionEstablished) {
+                                        palette.success.copy(alpha = 0.8f)
+                                    } else {
+                                        palette.accentLight.copy(alpha = 0.65f)
+                                    },
+                                    shape = CircleShape,
+                                ),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                imageVector = Icons.Filled.Person,
-                                contentDescription = peerForNode?.nickname ?: "Mesh Peer",
-                                tint = Color.White,
-                                modifier = Modifier.size(26.dp),
+                                imageVector = Icons.Rounded.Person,
+                                contentDescription = peer.nickname,
+                                tint = Color(0xFFD0BCFF),
+                                modifier = Modifier.size(23.dp),
                             )
                         }
-                    }
-
-                    // Center Glowing "Cipher" Hub Node
-                    Box(
-                        modifier = Modifier
-                            .size(110.dp)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.radialGradient(
-                                    colors = listOf(
-                                        Color(0xFF2E2166),
-                                        Color(0xFF19123B),
-                                    ),
-                                ),
-                            )
-                            .border(
-                                width = 2.2.dp,
-                                brush = Brush.linearGradient(
-                                    colors = listOf(
-                                        Color(0xFFC4B5FD),
-                                        Color(0xFF8B5CF6),
-                                        Color(0xFF6366F1),
-                                    ),
-                                ),
-                                shape = CircleShape,
-                            )
-                            .clickable(onClick = onAnnouncePulse)
-                            .testTag("mesh_center_cipher_node"),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                        ) {
-                            CipherChainLogo(size = 34.dp)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Cipher",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                ),
-                                color = Color.White,
-                            )
-                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = peer.nickname,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                            color = palette.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
-            }
 
-            // Bottom 3 Metric Cards Row
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                // Card 1: Peers Nearby
-                MeshMetricCard(
-                    modifier = Modifier.weight(1f),
-                    topContent = {
-                        Text(
-                            text = nearbyCount.toString(),
-                            style = MaterialTheme.typography.headlineLarge.copy(
-                                fontSize = 26.sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
-                            color = Color.White,
-                        )
-                    },
-                    label = "Peers Nearby",
-                )
-
-                // Card 2: Hops (Max 7)
-                MeshMetricCard(
-                    modifier = Modifier.weight(1f),
-                    topContent = {
-                        Text(
-                            text = maxHops.toString(),
-                            style = MaterialTheme.typography.headlineLarge.copy(
-                                fontSize = 26.sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
-                            color = Color.White,
-                        )
-                    },
-                    label = "Hops (Max 7)",
-                )
-
-                // Card 3: Good Signal
-                Surface(
-                    color = Color(0xFF181A28),
-                    shape = RoundedCornerShape(18.dp),
+                // Central glowing "Cipher" Local Hub Node
+                Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(88.dp)
-                        .border(1.dp, Color(0xFF262A40), RoundedCornerShape(18.dp)),
+                        .size(102.dp)
+                        .shadow(
+                            elevation = 24.dp,
+                            shape = CircleShape,
+                            ambientColor = palette.accent,
+                            spotColor = palette.accent,
+                        )
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color(0xFF472BA8),
+                                    Color(0xFF231757),
+                                    Color(0xFF171238),
+                                ),
+                            ),
+                        )
+                        .border(
+                            width = 2.dp,
+                            brush = Brush.linearGradient(
+                                listOf(
+                                    Color(0xFFB794FF),
+                                    palette.accent,
+                                ),
+                            ),
+                            shape = CircleShape,
+                        )
+                        .clickable {
+                            MeshController.announceNow()
+                            MeshController.pingAll()
+                        },
+                    contentAlignment = Alignment.Center,
                 ) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 10.dp, vertical = 10.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
-                        SignalBarsIcon(width = 24.dp, height = 17.dp)
-                        Spacer(modifier = Modifier.height(5.dp))
+                        CipherChainLogoIcon(size = 34.dp)
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Good",
+                            text = "Cipher",
                             style = MaterialTheme.typography.titleSmall.copy(
-                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
+                                fontSize = 14.5.sp,
                             ),
                             color = Color.White,
-                        )
-                        Text(
-                            text = "Signal",
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                            color = Color(0xFFB4B8D0),
                         )
                     }
                 }
             }
-        }
-    }
-}
 
-@Composable
-private fun MeshMetricCard(
-    modifier: Modifier = Modifier,
-    topContent: @Composable () -> Unit,
-    label: String,
-) {
-    Surface(
-        color = Color(0xFF181A28),
-        shape = RoundedCornerShape(18.dp),
-        modifier = modifier
-            .height(88.dp)
-            .border(1.dp, Color(0xFF262A40), RoundedCornerShape(18.dp)),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 10.dp, vertical = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            topContent()
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
-                color = Color(0xFFC4C8E0),
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-            )
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // 3 Bottom Metric Cards: [ Peers Nearby ] [ Hops (Max 7) ] [ Signal ]
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 26.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // Card 1: Peers Nearby
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(86.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(palette.surface)
+                        .border(1.dp, palette.borderSubtle, RoundedCornerShape(18.dp))
+                        .padding(horizontal = 10.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text(
+                            text = nearbyCount.toString(),
+                            style = MaterialTheme.typography.headlineMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 23.sp,
+                            ),
+                            color = palette.textPrimary,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Peers Nearby",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 11.5.sp,
+                            ),
+                            color = palette.textSecondary,
+                        )
+                    }
+                }
+
+                // Card 2: Hops (Max 7)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(86.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(palette.surface)
+                        .border(1.dp, palette.borderSubtle, RoundedCornerShape(18.dp))
+                        .padding(horizontal = 10.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text(
+                            text = maxObservedHops.toString(),
+                            style = MaterialTheme.typography.headlineMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 23.sp,
+                            ),
+                            color = palette.textPrimary,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Hops (Max $maxTtlHops)",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 11.5.sp,
+                            ),
+                            color = palette.textSecondary,
+                        )
+                    }
+                }
+
+                // Card 3: Signal Quality
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(86.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(palette.surface)
+                        .border(1.dp, palette.borderSubtle, RoundedCornerShape(18.dp))
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        SignalBarsIndicator(
+                            rssi = bestRssi,
+                            hops = if (peers.isNotEmpty()) 1 else 4,
+                            barWidth = 3.5.dp,
+                            maxBarHeight = 16.dp,
+                        )
+                        Spacer(modifier = Modifier.height(5.dp))
+                        Text(
+                            text = signalQualityLabel,
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.5.sp,
+                            ),
+                            color = palette.textPrimary,
+                        )
+                        Text(
+                            text = "Signal",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 11.sp,
+                            ),
+                            color = palette.textSecondary,
+                        )
+                    }
+                }
+            }
         }
     }
 }

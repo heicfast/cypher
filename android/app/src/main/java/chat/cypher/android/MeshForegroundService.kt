@@ -10,39 +10,17 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationCompat
+import chat.cypher.android.core.MeshController
 
-/**
- * Keeps the Cypher BLE mesh link layer running while the user switches apps or locks the screen.
- */
 class MeshForegroundService : Service() {
-    companion object {
-        private const val TAG = "MeshForegroundService"
-        private const val CHANNEL_ID = "cypher_mesh_channel"
-        private const val NOTIFICATION_ID = 4101
-        const val ACTION_STOP = "chat.cypher.android.action.STOP_MESH"
-
-        fun start(context: Context) {
-            val intent = Intent(context, MeshForegroundService::class.java)
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
-            }.onFailure { err ->
-                Log.w(TAG, "Unable to start foreground service: ${err.message}")
-            }
-        }
-    }
 
     override fun onCreate() {
         super.onCreate()
-        ensureNotificationChannel()
+        createNotificationChannel()
         val notification = buildNotification()
-        val started = runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     NOTIFICATION_ID,
                     notification,
@@ -51,43 +29,41 @@ class MeshForegroundService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
-            true
-        }.getOrElse { err ->
-            Log.w(TAG, "startForeground not allowed in current permission state: ${err.message}")
-            false
         }
-        if (!started) {
-            stopSelf()
-            return
-        }
-        (application as? CypherApplication)?.meshController?.startMesh()
+        MeshController.start(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            (application as? CypherApplication)?.meshController?.stopMesh()
-            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            MeshController.stop()
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
-        (application as? CypherApplication)?.meshController?.startMesh()
+        MeshController.start(applicationContext)
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        MeshController.stop()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun ensureNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val nm = getSystemService(NotificationManager::class.java) ?: return
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            getString(R.string.mesh_channel_name),
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply {
-            description = getString(R.string.mesh_channel_desc)
-            setShowBadge(false)
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.notif_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = getString(R.string.notif_channel_desc)
+                setShowBadge(false)
+            }
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(channel)
         }
-        nm.createNotificationChannel(channel)
     }
 
     private fun buildNotification(): Notification {
@@ -100,13 +76,31 @@ class MeshForegroundService : Service() {
             openIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+
+        val stopIntent = Intent(this, MeshForegroundService::class.java).apply {
+            action = ACTION_STOP
+        }
+        val pendingStop = PendingIntent.getService(
+            this,
+            1,
+            stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(R.string.mesh_service_title))
-            .setContentText(getString(R.string.mesh_service_text))
+            .setSmallIcon(R.drawable.ic_stat_cypher)
+            .setContentTitle(getString(R.string.notif_title))
+            .setContentText(getString(R.string.notif_body))
             .setContentIntent(pendingOpen)
             .setOngoing(true)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setSilent(true)
+            .addAction(0, getString(R.string.notif_stop_action), pendingStop)
             .build()
+    }
+
+    companion object {
+        private const val CHANNEL_ID = "cypher_mesh_relay"
+        private const val NOTIFICATION_ID = 0xC1F0
+        const val ACTION_STOP = "chat.cypher.android.ACTION_STOP_MESH"
     }
 }

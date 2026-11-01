@@ -1,64 +1,111 @@
 package chat.cypher.android
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import chat.cypher.android.onboarding.OnboardingFlow
-import chat.cypher.android.onboarding.hasAllMeshPermissions
-import chat.cypher.android.ui.AppScaffold
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
+import chat.cypher.android.core.MeshController
+import chat.cypher.android.core.MeshStore
+import chat.cypher.android.onboarding.BatteryOptimizationHelper
+import chat.cypher.android.onboarding.OnboardingPreferences
+import chat.cypher.android.onboarding.OnboardingScreen
+import chat.cypher.android.ui.CypherAppRoot
 import chat.cypher.android.ui.theme.CypherTheme
 
 class MainActivity : ComponentActivity() {
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) {
+        startMeshService()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-
-        val controller = (application as CypherApplication).meshController
-        handleConversationIntent(intent)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
+        MeshStore.loadOrCreateSeed(applicationContext)
 
         setContent {
-            val themePreference by controller.themePreference.collectAsState()
-            val batterySkipped by controller.batteryOptimizationSkipped.collectAsState()
+            val screenSecurity by MeshStore.screenSecurityEnabled.collectAsState()
+            LaunchedEffect(screenSecurity) {
+                if (screenSecurity) {
+                    window.setFlags(
+                        WindowManager.LayoutParams.FLAG_SECURE,
+                        WindowManager.LayoutParams.FLAG_SECURE,
+                    )
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
+            }
 
-            CypherTheme(preference = themePreference) {
-                OnboardingFlow(
-                    batteryOptimizationSkipped = batterySkipped,
-                    onSetBatteryOptimizationSkipped = { skipped ->
-                        controller.setBatteryOptimizationSkipped(skipped)
-                    },
-                    onReady = {
-                        if (hasAllMeshPermissions(this@MainActivity)) {
-                            if (controller.backgroundServiceEnabled.value) {
-                                MeshForegroundService.start(this@MainActivity)
-                            }
-                            controller.startMesh()
-                        }
-                    },
-                ) {
+            var onboardingDone by remember {
+                mutableStateOf(OnboardingPreferences.isCompleted(applicationContext))
+            }
+
+            CypherTheme {
+                if (!onboardingDone) {
+                    OnboardingScreen(
+                        onFinished = {
+                            onboardingDone = true
+                            startMeshService()
+                        },
+                    )
+                } else {
                     LaunchedEffect(Unit) {
-                        if (hasAllMeshPermissions(this@MainActivity)) {
-                            controller.startMesh()
-                        }
+                        startMeshService()
                     }
-                    AppScaffold(controller = controller)
+                    CypherAppRoot(
+                        onRequestPermissions = { requestMeshPermissions() },
+                        onRequestBatteryOptimization = {
+                            BatteryOptimizationHelper.launchExemptionRequest(this@MainActivity)
+                        },
+                        onEmergencyWipeCompleted = {
+                            onboardingDone = false
+                        },
+                    )
                 }
             }
         }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handleConversationIntent(intent)
+    private fun requestMeshPermissions() {
+        val perms = buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(Manifest.permission.BLUETOOTH_SCAN)
+                add(Manifest.permission.BLUETOOTH_ADVERTISE)
+                add(Manifest.permission.BLUETOOTH_CONNECT)
+            } else {
+                add(Manifest.permission.ACCESS_FINE_LOCATION)
+                add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        permissionLauncher.launch(perms.toTypedArray())
     }
 
-    private fun handleConversationIntent(intent: Intent?) {
-        val convKey = intent?.getStringExtra("conversation_key") ?: return
-        val controller = (application as? CypherApplication)?.meshController ?: return
-        controller.openConversation(convKey)
+    private fun startMeshService() {
+        MeshController.start(applicationContext)
+        runCatching {
+            val svcIntent = Intent(this, MeshForegroundService::class.java)
+            ContextCompat.startForegroundService(this, svcIntent)
+        }
     }
 }

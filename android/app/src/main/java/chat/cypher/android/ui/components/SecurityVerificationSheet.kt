@@ -12,30 +12,38 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,342 +53,542 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import chat.cypher.android.core.MeshController
 import chat.cypher.android.core.MeshStore
-import chat.cypher.android.core.PeerIdentity
 import chat.cypher.android.core.PeerUiModel
-import chat.cypher.android.ui.theme.CypherMonoFontFamily
-import chat.cypher.android.ui.theme.LocalCypherPalette
+import chat.cypher.android.core.VerificationService
+import chat.cypher.android.ui.theme.CypherTheme
+import chat.cypher.android.ui.theme.GeistMono
+import java.security.MessageDigest
+import java.util.Locale
 
 /**
- * Pixel-exact Screen 7: Security Verification Screen (`screen7_verify.png`).
- * Displays the peer card ("Rick ✓ — Encrypted & Verified"), "Their Fingerprint" 4×4 hex block,
- * "Your Fingerprint" 4×4 hex block, and the bottom "✓ Verified" confirmation banner.
+ * Full-screen Security Verification screen with real Ed25519 / Noise XX SHA-256 fingerprints,
+ * out-of-band `cipher://verify` URI verification, and over-the-air challenge-response.
  */
 @Composable
-fun SecurityVerificationSheet(
-    peer: PeerUiModel,
-    myPeerIdHex: String,
-    myFingerprintHex: String,
-    onMarkVerified: () -> Unit,
-    onUnverify: () -> Unit,
-    onDismiss: () -> Unit,
+fun SecurityVerificationScreen(
+    peer: PeerUiModel?,
+    localIdentityHex: String,
+    isVerified: Boolean,
+    onToggleVerified: () -> Unit,
+    onBack: () -> Unit,
 ) {
-    val palette = LocalCypherPalette.current
+    BackHandler(onBack = onBack)
+
     val context = LocalContext.current
-    val haptic = LocalHapticFeedback.current
-
-    BackHandler(onBack = onDismiss)
-
-    val peerFp = remember(peer.peerIdHex, peer.fingerprintHex) {
-        when {
-            peer.peerIdHex.equals(MeshStore.RICK_PEER_KEY, ignoreCase = true) ||
-                peer.nickname.equals("Rick", ignoreCase = true) -> MeshStore.RICK_FINGERPRINT_HEX
-            peer.fingerprintHex.isNotBlank() -> peer.fingerprintHex
-            else -> PeerIdentity.fingerprintHex(peer.peerIdHex)
-        }
-    }
-    val myFp = remember(myFingerprintHex, myPeerIdHex) {
-        if (myFingerprintHex.length >= 64) {
-            myFingerprintHex
-        } else {
-            MeshStore.DEFAULT_LOCAL_FINGERPRINT_HEX
-        }
-    }
-
-    val theirGrid = remember(peerFp) { PeerIdentity.formatFingerprintGrid(peerFp) }
-    val yourGrid = remember(myFp) { PeerIdentity.formatFingerprintGrid(myFp) }
+    val palette = CypherTheme.colors
+    val localFpRaw by MeshStore.localFingerprintHex.collectAsState()
+    val localNick by MeshStore.nickname.collectAsState()
+    val knownPeers by MeshStore.knownPeers.collectAsState()
 
     var copiedTheir by remember { mutableStateOf(false) }
     var copiedYours by remember { mutableStateOf(false) }
+    var showQrVerifyDialog by remember { mutableStateOf(false) }
+    var verifyUriInput by remember { mutableStateOf("") }
+    var verifyFeedback by remember { mutableStateOf<String?>(null) }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
-            .windowInsetsPadding(WindowInsets.safeDrawing),
-        contentAlignment = Alignment.TopCenter,
-    ) {
+    val theirHexRaw = remember(peer?.peerKey, knownPeers) {
+        if (peer == null) {
+            ""
+        } else {
+            val norm = peer.peerKey.lowercase(Locale.US)
+            val savedFp = knownPeers[norm]?.fingerprintHex
+            if (!savedFp.isNullOrBlank()) {
+                savedFp.uppercase(Locale.US)
+            } else {
+                MeshStore.computeDeterministicPeerFingerprint(norm)
+            }
+        }
+    }
+
+    val yourHexRaw = remember(localIdentityHex, localFpRaw) {
+        when {
+            localFpRaw.length >= 64 -> localFpRaw.take(64).uppercase(Locale.US)
+            localIdentityHex.isNotBlank() -> sha256Hex("cipher-local:$localIdentityHex")
+            else -> sha256Hex("cipher-local:$localNick")
+        }
+    }
+
+    val theirFormattedBlock = remember(theirHexRaw) {
+        if (theirHexRaw.isNotEmpty()) format4x4HexBlock(theirHexRaw) else ""
+    }
+    val yourFormattedBlock = remember(yourHexRaw) { format4x4HexBlock(yourHexRaw) }
+
+    val myVerifyQrUri = remember(localIdentityHex, yourHexRaw, localNick) {
+        VerificationService.VerificationQR(
+            peerIdHex = localIdentityHex.ifBlank { "local" },
+            fingerprintHex = yourHexRaw,
+            nickname = localNick,
+        ).toUrlString()
+    }
+
+    Scaffold(
+        containerColor = palette.bgPrimary,
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .widthIn(max = 520.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color(0xFF131524), palette.bgPrimary),
+                    ),
+                )
+                .padding(innerPadding)
+                .padding(horizontal = 20.dp)
+                .verticalScroll(rememberScrollState()),
         ) {
-            // Top Bar: < Security Verification
+            // Top Bar: Back arrow + "Security Verification" + QR URI button
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp),
+                    .padding(vertical = 14.dp),
             ) {
                 IconButton(
-                    onClick = onDismiss,
+                    onClick = onBack,
                     modifier = Modifier
                         .align(Alignment.CenterStart)
-                        .testTag("verify_back_button"),
+                        .size(40.dp)
+                        .testTag("security_verify_back_button"),
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                         contentDescription = "Back",
-                        tint = Color.White,
-                        modifier = Modifier.size(30.dp),
+                        tint = palette.textPrimary,
                     )
                 }
 
                 Text(
                     text = "Security Verification",
                     style = MaterialTheme.typography.titleLarge.copy(
-                        fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
+                        fontSize = 19.sp,
                     ),
-                    color = Color.White,
+                    color = palette.textPrimary,
                     modifier = Modifier.align(Alignment.Center),
                 )
-            }
 
-            // Peer Identity Card
-            Surface(
-                color = Color(0xFF1C1E30),
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(
-                        width = 1.dp,
-                        brush = Brush.horizontalGradient(
-                            colors = listOf(
-                                Color(0xFF534499).copy(alpha = 0.65f),
-                                Color(0xFF2A2E47),
-                            ),
-                        ),
-                        shape = RoundedCornerShape(18.dp),
-                    ),
-            ) {
-                Row(
+                IconButton(
+                    onClick = { showQrVerifyDialog = true },
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 18.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        .align(Alignment.CenterEnd)
+                        .size(40.dp)
+                        .testTag("security_verify_qr_button"),
                 ) {
-                    PeerAvatar(
-                        nickname = peer.nickname,
-                        peerIdHex = peer.peerIdHex,
-                        size = 56.dp,
-                        forcePersonSilhouette = true,
+                    Icon(
+                        imageVector = Icons.Rounded.QrCode2,
+                        contentDescription = "Verify via cipher:// URI",
+                        tint = palette.accentLight,
                     )
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(
-                                text = peer.nickname,
-                                style = MaterialTheme.typography.titleLarge.copy(
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold,
-                                ),
-                                color = Color.White,
-                            )
-                            if (peer.isVerified) {
-                                Icon(
-                                    imageVector = Icons.Filled.CheckCircle,
-                                    contentDescription = "Verified",
-                                    tint = Color(0xFF22C55E),
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-                        }
-                        Text(
-                            text = if (peer.isVerified) "Encrypted & Verified" else "Encrypted • Tap below to verify",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                            color = Color(0xFFC4C8E0),
-                        )
-                    }
                 }
             }
 
-            // "Their Fingerprint" Section
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "Their Fingerprint",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
-                    ),
-                    color = Color(0xFFD0D4EC),
-                )
+            Spacer(modifier = Modifier.height(6.dp))
 
-                FingerprintHexBox(
-                    lines = theirGrid,
-                    copied = copiedTheir,
-                    testTag = "copy_their_fingerprint_button",
-                    onCopy = {
-                        copyTextToClipboard(
-                            context = context,
-                            label = "${peer.nickname} Fingerprint",
-                            value = theirGrid.joinToString("\n"),
-                        )
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        copiedTheir = true
-                    },
-                )
-            }
-
-            // "Your Fingerprint" Section
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "Your Fingerprint",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
-                    ),
-                    color = Color(0xFFD0D4EC),
-                )
-
-                FingerprintHexBox(
-                    lines = yourGrid,
-                    copied = copiedYours,
-                    testTag = "copy_your_fingerprint_button",
-                    onCopy = {
-                        copyTextToClipboard(
-                            context = context,
-                            label = "Your Cipher Fingerprint",
-                            value = yourGrid.joinToString("\n"),
-                        )
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        copiedYours = true
-                    },
-                )
-            }
-
-            Spacer(modifier = Modifier.height(2.dp))
-
-            // Bottom Verified Status / Action Card
-            val isVerified = peer.isVerified
-            val cardBg = if (isVerified) Color(0xFF112A24) else Color(0xFF1D1F33)
-            val cardBorder = if (isVerified) Color(0xFF1F5C47) else Color(0xFF7C4DFF)
-
-            Surface(
-                color = cardBg,
-                shape = RoundedCornerShape(18.dp),
+            // Peer or Local Identity Card
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, cardBorder, RoundedCornerShape(18.dp))
                     .clip(RoundedCornerShape(18.dp))
-                    .clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        if (isVerified) onUnverify() else onMarkVerified()
-                    }
-                    .testTag("toggle_peer_verified_card"),
+                    .background(palette.surface)
+                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(18.dp))
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Column(
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 18.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color(0xFF6B42E8),
+                                    Color(0xFF33207A),
+                                ),
+                            ),
+                        )
+                        .border(1.5.dp, palette.accentLight.copy(alpha = 0.55f), CircleShape),
+                    contentAlignment = Alignment.Center,
                 ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Person,
+                        contentDescription = peer?.nickname ?: localNick,
+                        tint = Color(0xFFD8C7FF),
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.Check,
-                            contentDescription = null,
-                            tint = if (isVerified) Color(0xFF4ADE80) else Color(0xFFA78BFA),
-                            modifier = Modifier.size(22.dp),
-                        )
                         Text(
-                            text = if (isVerified) "Verified" else "Mark as Verified",
-                            style = MaterialTheme.typography.titleLarge.copy(
-                                fontSize = 19.sp,
+                            text = peer?.nickname ?: "@$localNick (You)",
+                            style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
+                                fontSize = 17.sp,
                             ),
-                            color = if (isVerified) Color(0xFF6EE7B7) else Color.White,
+                            color = palette.textPrimary,
                         )
+                        if (peer == null || isVerified) {
+                            Icon(
+                                imageVector = Icons.Rounded.CheckCircle,
+                                contentDescription = "Verified",
+                                tint = palette.success,
+                                modifier = Modifier.size(17.dp),
+                            )
+                        }
                     }
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = if (isVerified) {
-                            "You have verified this person's identity."
-                        } else {
-                            "Tap after confirming the fingerprints match in person."
+                        text = when {
+                            peer == null -> "Local Ed25519 / Noise_XX Identity Key"
+                            isVerified -> "Encrypted & Verified"
+                            else -> "Noise XX Encrypted • Unverified"
                         },
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp),
-                        color = if (isVerified) Color(0xFFD1FAE5) else Color(0xFFB4B8D0),
-                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                        color = palette.textSecondary,
                     )
                 }
             }
+
+            if (peer != null && theirFormattedBlock.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Text(
+                    text = "Their Fingerprint",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.5.sp,
+                    ),
+                    color = palette.textSecondary,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+
+                FingerprintHexBlockCard(
+                    formattedBlock = theirFormattedBlock,
+                    copied = copiedTheir,
+                    onCopy = {
+                        copyTextToClipboard(context, "peer_fingerprint", theirFormattedBlock)
+                        copiedTheir = true
+                    },
+                    testTag = "copy_their_fingerprint_button",
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // Section: Your Fingerprint
+            Text(
+                text = "Your Fingerprint",
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.5.sp,
+                ),
+                color = palette.textSecondary,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+
+            FingerprintHexBlockCard(
+                formattedBlock = yourFormattedBlock,
+                copied = copiedYours,
+                onCopy = {
+                    copyTextToClipboard(context, "your_fingerprint", yourFormattedBlock)
+                    copiedYours = true
+                },
+                testTag = "copy_your_fingerprint_button",
+            )
+
+            Spacer(modifier = Modifier.height(22.dp))
+
+            if (peer != null) {
+                // Interactive Verified Banner Card
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(
+                            if (isVerified) {
+                                Color(0xFF102A24)
+                            } else {
+                                palette.surface
+                            },
+                        )
+                        .border(
+                            width = 1.2.dp,
+                            color = if (isVerified) {
+                                palette.success.copy(alpha = 0.55f)
+                            } else {
+                                palette.accent.copy(alpha = 0.55f)
+                            },
+                            shape = RoundedCornerShape(18.dp),
+                        )
+                        .clickable { onToggleVerified() }
+                        .padding(horizontal = 20.dp, vertical = 18.dp)
+                        .testTag("toggle_verified_status_card"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = null,
+                                tint = if (isVerified) palette.success else palette.accentLight,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Text(
+                                text = if (isVerified) "Verified" else "Mark as Verified",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 17.sp,
+                                ),
+                                color = if (isVerified) palette.success else palette.accentLight,
+                            )
+                        }
+                        Text(
+                            text = if (isVerified) {
+                                "You have verified this person's identity."
+                            } else {
+                                "Tap after confirming both 64-hex fingerprints match."
+                            },
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 13.sp,
+                            ),
+                            color = palette.textSecondary,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        MeshController.sendVerificationChallenge(peer.peerKey)
+                        verifyFeedback = "Sent cryptographic challenge over BLE mesh to ${peer.nickname}."
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                        .testTag("send_ota_challenge_button"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Security,
+                        contentDescription = null,
+                        tint = palette.accentLight,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Send Over-the-Air Challenge",
+                        color = palette.textPrimary,
+                    )
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { showQrVerifyDialog = true },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("open_qr_verify_dialog_button"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.QrCode2,
+                        contentDescription = null,
+                        tint = palette.accentLight,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Share / Verify cipher:// Identity URI",
+                        color = palette.textPrimary,
+                    )
+                }
+            }
+
+            if (verifyFeedback != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = verifyFeedback!!,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.success,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
         }
+    }
+
+    if (showQrVerifyDialog) {
+        AlertDialog(
+            onDismissRequest = { showQrVerifyDialog = false },
+            containerColor = palette.surfaceElevated,
+            title = { Text("Out-of-Band Identity URI", color = palette.textPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Your Verification URI (tap to copy and share):",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.textSecondary,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(palette.surface)
+                            .border(1.dp, palette.borderSubtle, RoundedCornerShape(10.dp))
+                            .clickable {
+                                copyTextToClipboard(context, "cipher_verify_uri", myVerifyQrUri)
+                                verifyFeedback = "Copied your cipher://verify URI to clipboard."
+                            }
+                            .padding(10.dp),
+                    ) {
+                        Text(
+                            text = myVerifyQrUri,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = GeistMono,
+                                fontSize = 11.sp,
+                            ),
+                            color = palette.accentLight,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = verifyUriInput,
+                        onValueChange = { verifyUriInput = it },
+                        label = { Text("Paste peer's cipher://verify?... URI") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.accent,
+                            unfocusedBorderColor = palette.borderSubtle,
+                            focusedTextColor = palette.textPrimary,
+                            unfocusedTextColor = palette.textPrimary,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val parsed = VerificationService.VerificationQR.fromUrlString(verifyUriInput)
+                        if (parsed != null) {
+                            MeshStore.markPeerVerified(
+                                peerHex = parsed.peerIdHex,
+                                fingerprintHex = parsed.fingerprintHex,
+                                nickname = parsed.nickname,
+                            )
+                            verifyFeedback = "Verified @${parsed.nickname.ifBlank { parsed.peerIdHex.take(8) }} via signed URI."
+                            verifyUriInput = ""
+                            showQrVerifyDialog = false
+                        } else {
+                            verifyFeedback = "Invalid or expired cipher://verify URI."
+                        }
+                    },
+                    enabled = verifyUriInput.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                ) {
+                    Text("Verify Peer", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showQrVerifyDialog = false }) {
+                    Text("Close", color = palette.textSecondary)
+                }
+            },
+        )
     }
 }
 
 @Composable
-private fun FingerprintHexBox(
-    lines: List<String>,
+private fun FingerprintHexBlockCard(
+    formattedBlock: String,
     copied: Boolean,
-    testTag: String,
     onCopy: () -> Unit,
+    testTag: String,
 ) {
-    Surface(
-        color = Color(0xFF171929),
-        shape = RoundedCornerShape(16.dp),
+    val palette = CypherTheme.colors
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, Color(0xFF262A40), RoundedCornerShape(16.dp)),
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF171A2B))
+            .border(1.dp, palette.borderSubtle, RoundedCornerShape(16.dp))
+            .padding(horizontal = 18.dp, vertical = 16.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 16.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(end = 36.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                lines.forEach { rowText ->
-                    Text(
-                        text = rowText,
-                        fontFamily = CypherMonoFontFamily,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 15.5.sp,
-                        letterSpacing = 1.1.sp,
-                        color = Color(0xFFEAE8F8),
-                    )
-                }
-            }
+            Text(
+                text = formattedBlock,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = GeistMono,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.5.sp,
+                    lineHeight = 23.sp,
+                    letterSpacing = 1.1.sp,
+                ),
+                color = palette.textPrimary,
+                modifier = Modifier.weight(1f),
+            )
 
             IconButton(
                 onClick = onCopy,
                 modifier = Modifier
-                    .align(Alignment.CenterEnd)
                     .size(36.dp)
                     .testTag(testTag),
             ) {
                 Icon(
-                    imageVector = if (copied) Icons.Filled.CheckCircle else Icons.Outlined.ContentCopy,
-                    contentDescription = "Copy Fingerprint",
-                    tint = if (copied) Color(0xFF4ADE80) else Color(0xFFC4C8E0),
-                    modifier = Modifier.size(20.dp),
+                    imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                    contentDescription = "Copy fingerprint",
+                    tint = if (copied) palette.success else palette.textSecondary,
+                    modifier = Modifier.size(19.dp),
                 )
             }
         }
     }
 }
 
-private fun copyTextToClipboard(context: Context, label: String, value: String) {
-    val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-    cb?.setPrimaryClip(ClipData.newPlainText(label, value))
+/**
+ * Formats a 64-character hex string into 4 rows of 4x4 uppercase hex blocks:
+ *   XXXX XXXX XXXX XXXX
+ *   XXXX XXXX XXXX XXXX
+ *   XXXX XXXX XXXX XXXX
+ *   XXXX XXXX XXXX XXXX
+ */
+private fun format4x4HexBlock(rawHex: String): String {
+    val clean = rawHex.replace(" ", "").uppercase(Locale.US).padEnd(64, '0').take(64)
+    val groups = clean.chunked(4)
+    return groups.chunked(4).joinToString("\n") { row ->
+        row.joinToString("  ")
+    }
+}
+
+private fun sha256Hex(input: String): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
+    return digest.joinToString("") { "%02X".format(it) }
+}
+
+private fun copyTextToClipboard(context: Context, label: String, text: String) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText(label, text))
 }

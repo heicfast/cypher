@@ -10,6 +10,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+data class RecordedVoiceNote(
+    val file: File,
+    val durationMs: Long
+)
+
 /**
  * Compact 16 kHz mono AAC (.m4a) voice note recorder for mesh transmission.
  */
@@ -70,7 +75,11 @@ class VoiceNoteRecorder(private val context: Context) {
         return (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L)
     }
 
-    fun stop(canceled: Boolean = false): Pair<File, Long>? {
+    fun cancel() {
+        stop(canceled = true)
+    }
+
+    fun stop(canceled: Boolean = false): RecordedVoiceNote? {
         val duration = elapsedMs()
         val file = outFile
         try {
@@ -96,6 +105,6 @@ class VoiceNoteRecorder(private val context: Context) {
             retriever.release()
             d
         }.getOrDefault(duration)
-        return file to probedDuration.coerceAtLeast(duration)
+        return RecordedVoiceNote(file = file, durationMs = probedDuration.coerceAtLeast(duration))
     }
 }

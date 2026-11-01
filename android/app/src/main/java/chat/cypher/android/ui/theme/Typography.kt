@@ -8,12 +8,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import chat.cypher.android.R
 
-/**
- * Custom bundled Google Fonts installed via font-util:
- * - Space Grotesk: Sharp, technical display & section headers
- * - Plus Jakarta Sans: High-x-height, ultra-legible conversational UI & message copy
- * - JetBrains Mono: Cryptographic fingerprints, peer IDs, RSSI telemetry, and slash commands
- */
 val CypherDisplayFontFamily = FontFamily(
     Font(R.font.space_grotesk, FontWeight.Normal),
     Font(R.font.space_grotesk, FontWeight.Medium),
@@ -34,6 +28,8 @@ val CypherMonoFontFamily = FontFamily(
     Font(R.font.jetbrains_mono, FontWeight.SemiBold),
     Font(R.font.jetbrains_mono, FontWeight.Bold),
 )
+
+val GeistMono: FontFamily = CypherMonoFontFamily
 
 val CypherTypography = Typography(
     displayLarge = TextStyle(

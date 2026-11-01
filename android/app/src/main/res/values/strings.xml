@@ -7,4 +7,9 @@
     <string name="mesh_channel_desc">Persistent status for the background Bluetooth LE mesh link layer</string>
     <string name="dm_channel_name">Encrypted Direct Messages</string>
     <string name="dm_channel_desc">Alerts for incoming Noise XX encrypted private messages and mentions</string>
+    <string name="notif_channel_name">Cipher Mesh Relay</string>
+    <string name="notif_channel_desc">Persistent status for the background Bluetooth LE mesh link layer</string>
+    <string name="notif_title">Cipher Mesh Active</string>
+    <string name="notif_body">Encrypted Bluetooth LE mesh relay is running</string>
+    <string name="notif_stop_action">Stop Mesh</string>
 </resources>

@@ -11,16 +11,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -34,44 +28,36 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Hub
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Power
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.BatterySaver
+import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.ChatBubbleOutline
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Hub
+import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -80,12 +66,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -98,418 +85,370 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.LifecycleOwner
-import chat.cypher.android.ui.components.CipherChainLogo
-import chat.cypher.android.ui.theme.CypherDisplayFontFamily
-import chat.cypher.android.ui.theme.CypherMonoFontFamily
-import chat.cypher.android.ui.theme.LocalCypherPalette
-import kotlinx.coroutines.delay
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import chat.cypher.android.ui.components.CipherChainLogoIcon
+import chat.cypher.android.ui.theme.CypherTheme
 
-enum class OnboardingStep {
-    CHECKING,
-    PERMISSION_EXPLANATION,
-    BLUETOOTH_CHECK,
-    LOCATION_CHECK,
-    BATTERY_OPTIMIZATION,
-    INITIALIZING,
-    COMPLETE,
+object OnboardingPreferences {
+    private const val PREF_FILE = "cypher_onboarding_prefs"
+    private const val KEY_COMPLETED = "onboarding_completed"
+    private const val KEY_BATTERY_SKIPPED = "battery_opt_skipped"
+
+    fun isCompleted(context: Context): Boolean {
+        return context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+            .getBoolean(KEY_COMPLETED, false)
+    }
+
+    fun markCompleted(context: Context) {
+        context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_COMPLETED, true)
+            .apply()
+    }
+
+    fun isBatterySkipped(context: Context): Boolean {
+        return context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+            .getBoolean(KEY_BATTERY_SKIPPED, false)
+    }
+
+    fun markBatterySkipped(context: Context) {
+        context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_BATTERY_SKIPPED, true)
+            .apply()
+    }
+
+    fun resetOnboarding(context: Context) {
+        context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+    }
 }
 
-/**
- * Shared helper for inspecting and requesting Android battery optimization exemptions,
- * modeled after bitchat-android's BatteryOptimizationManager with 3-tier intent fallback.
- */
 object BatteryOptimizationHelper {
-    private const val TAG = "BatteryOptHelper"
-
     fun isIgnoringBatteryOptimizations(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
-        return try {
-            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to query isIgnoringBatteryOptimizations", e)
-            false
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
+        return pm.isIgnoringBatteryOptimizations(context.packageName)
+    }
+
+    fun buildRequestIgnoreBatteryOptimizationsIntent(context: Context): Intent {
+        return Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:${context.packageName}")
+        }
+    }
+
+    fun buildBatteryOptimizationSettingsIntent(): Intent {
+        return Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+    }
+
+    fun buildAppDetailsSettingsIntent(context: Context): Intent {
+        return Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", context.packageName, null)
         }
     }
 
     fun launchExemptionRequest(
         context: Context,
         launcher: ActivityResultLauncher<Intent>? = null,
-        forceListSettings: Boolean = false,
-        onError: (String) -> Unit = {},
-    ) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-
-        val candidateIntents = buildList {
-            if (!forceListSettings) {
-                add(
-                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                        data = Uri.parse("package:${context.packageName}")
-                    },
-                )
+    ): Boolean {
+        val candidates = listOf(
+            buildRequestIgnoreBatteryOptimizationsIntent(context),
+            buildBatteryOptimizationSettingsIntent(),
+            buildAppDetailsSettingsIntent(context),
+            Intent(Settings.ACTION_SETTINGS),
+        )
+        for (intent in candidates) {
+            val resolved = intent.resolveActivity(context.packageManager) != null
+            if (resolved) {
+                val ok = runCatching {
+                    if (launcher != null) {
+                        launcher.launch(intent)
+                    } else {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(intent)
+                    }
+                }.isSuccess
+                if (ok) return true
             }
-            add(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-            add(
-                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.fromParts("package", context.packageName, null)
-                },
-            )
-            add(Intent(Settings.ACTION_SETTINGS))
         }
-
-        for (intent in candidateIntents) {
-            val launched = runCatching {
-                if (launcher != null) {
-                    launcher.launch(intent)
-                } else {
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
-                }
-                true
-            }.getOrElse { err ->
-                Log.w(TAG, "Intent ${intent.action} failed: ${err.message}")
-                false
-            }
-            if (launched) return
-        }
-
-        onError("Unable to open Android battery settings on this device.")
+        return runCatching {
+            val fallback = buildAppDetailsSettingsIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(fallback)
+        }.isSuccess
     }
 }
 
-fun requiredMeshPermissions(): List<String> = buildList {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        add(Manifest.permission.BLUETOOTH_SCAN)
-        add(Manifest.permission.BLUETOOTH_ADVERTISE)
-        add(Manifest.permission.BLUETOOTH_CONNECT)
-    } else {
-        add(Manifest.permission.ACCESS_FINE_LOCATION)
-        add(Manifest.permission.ACCESS_COARSE_LOCATION)
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        add(Manifest.permission.POST_NOTIFICATIONS)
-    }
-}
-
-fun hasAllMeshPermissions(context: Context): Boolean =
-    requiredMeshPermissions().all { perm ->
-        ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
-    }
-
-private fun isBluetoothEnabled(context: Context): Boolean {
-    val bm = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-    return bm?.adapter?.isEnabled == true
-}
-
-private fun isLocationEnabledIfRequired(context: Context): Boolean {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return true
-    val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return true
-    return runCatching {
-        lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
-            lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-    }.getOrDefault(true)
+enum class OnboardingStep {
+    WELCOME,
+    RADIO_SERVICES,
+    BATTERY_EXEMPTION,
 }
 
 @Composable
-fun OnboardingFlow(
-    batteryOptimizationSkipped: Boolean,
-    onSetBatteryOptimizationSkipped: (Boolean) -> Unit,
-    onReady: () -> Unit,
-    content: @Composable () -> Unit,
+fun OnboardingScreen(
+    onFinished: () -> Unit,
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = context as? LifecycleOwner
-    val palette = LocalCypherPalette.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val palette = CypherTheme.colors
 
-    var refreshTrigger by remember { mutableIntStateOf(0) }
-    var batteryError by remember { mutableStateOf<String?>(null) }
+    var refreshTick by remember { mutableIntStateOf(0) }
 
-    fun computeStep(skippedBattery: Boolean): OnboardingStep {
-        return when {
-            !hasAllMeshPermissions(context) -> OnboardingStep.PERMISSION_EXPLANATION
-            !isBluetoothEnabled(context) -> OnboardingStep.BLUETOOTH_CHECK
-            !isLocationEnabledIfRequired(context) -> OnboardingStep.LOCATION_CHECK
-            !BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context) && !skippedBattery ->
-                OnboardingStep.BATTERY_OPTIMIZATION
-            else -> OnboardingStep.COMPLETE
+    val requiredPermissions = remember {
+        buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(Manifest.permission.BLUETOOTH_SCAN)
+                add(Manifest.permission.BLUETOOTH_ADVERTISE)
+                add(Manifest.permission.BLUETOOTH_CONNECT)
+            } else {
+                add(Manifest.permission.ACCESS_FINE_LOCATION)
+                add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
     }
 
-    var step by remember { mutableStateOf(computeStep(batteryOptimizationSkipped)) }
+    fun hasAllPermissions(): Boolean {
+        return requiredPermissions.all { perm ->
+            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+        }
+    }
 
-    DisposableEffect(lifecycleOwner, batteryOptimizationSkipped) {
+    fun isBluetoothReady(): Boolean {
+        val bm = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter: BluetoothAdapter? = bm?.adapter
+        if (adapter == null) return true
+        return adapter.isEnabled
+    }
+
+    fun isLocationReady(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return true
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return true
+        return lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+            lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    }
+
+    fun isBatteryReady(): Boolean {
+        return BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context) ||
+            OnboardingPreferences.isBatterySkipped(context)
+    }
+
+    var manualContinueFromWelcome by remember { mutableStateOf(false) }
+
+    val currentStep = remember(refreshTick, manualContinueFromWelcome) {
+        when {
+            !manualContinueFromWelcome && !hasAllPermissions() -> OnboardingStep.WELCOME
+            !isBluetoothReady() || !isLocationReady() -> OnboardingStep.RADIO_SERVICES
+            !isBatteryReady() -> OnboardingStep.BATTERY_EXEMPTION
+            else -> null
+        }
+    }
+
+    DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                refreshTrigger++
+                refreshTick += 1
             }
         }
-        lifecycleOwner?.lifecycle?.addObserver(observer)
-        onDispose { lifecycleOwner?.lifecycle?.removeObserver(observer) }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(refreshTrigger, batteryOptimizationSkipped) {
-        if (step != OnboardingStep.COMPLETE && step != OnboardingStep.INITIALIZING) {
-            val next = computeStep(batteryOptimizationSkipped)
-            if (next == OnboardingStep.COMPLETE) {
-                step = OnboardingStep.INITIALIZING
-            } else {
-                step = next
-            }
-        }
+    if (currentStep == null) {
+        OnboardingPreferences.markCompleted(context)
+        onFinished()
+        return
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
-    ) { resultMap ->
-        val allGranted = resultMap.values.all { it }
-        if (allGranted) {
-            refreshTrigger++
-        } else {
-            // In emulator/preview or if denied, still allow entering the app cleanly
-            onSetBatteryOptimizationSkipped(true)
-            step = OnboardingStep.INITIALIZING
-        }
+    ) {
+        manualContinueFromWelcome = true
+        refreshTick += 1
     }
 
-    val enableBtLauncher = rememberLauncherForActivityResult(
+    val settingsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
     ) {
-        refreshTrigger++
+        refreshTick += 1
     }
 
-    val batteryLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult(),
-    ) {
-        batteryError = null
-        if (BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)) {
-            step = OnboardingStep.INITIALIZING
-        } else {
-            refreshTrigger++
-        }
-    }
-
-    LaunchedEffect(step) {
-        if (step == OnboardingStep.INITIALIZING) {
-            onReady()
-            delay(300)
-            step = OnboardingStep.COMPLETE
-        } else if (step == OnboardingStep.COMPLETE) {
-            onReady()
-        }
-    }
-
-    if (step == OnboardingStep.COMPLETE) {
-        content()
-        return
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF0E0F1A),
-                        Color(0xFF151329),
-                        Color(0xFF0D0E17),
+    Scaffold(
+        containerColor = palette.bgPrimary,
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF15162B),
+                            Color(0xFF101222),
+                            palette.bgPrimary,
+                        ),
                     ),
-                ),
-            )
-            .windowInsetsPadding(WindowInsets.safeDrawing),
-        contentAlignment = Alignment.Center,
-    ) {
-        AnimatedContent(
-            targetState = step,
-            transitionSpec = {
-                fadeIn(tween(220)) togetherWith fadeOut(tween(160))
-            },
-            label = "onboarding_step",
-        ) { targetStep ->
-            when (targetStep) {
-                OnboardingStep.CHECKING,
-                OnboardingStep.PERMISSION_EXPLANATION,
-                -> CipherWelcomeScreen(
-                    onGetStarted = {
-                        val perms = requiredMeshPermissions()
-                        if (perms.isEmpty()) {
-                            onSetBatteryOptimizationSkipped(true)
-                            step = OnboardingStep.INITIALIZING
-                        } else {
-                            runCatching {
-                                permissionLauncher.launch(perms.toTypedArray())
-                            }.onFailure {
-                                onSetBatteryOptimizationSkipped(true)
-                                step = OnboardingStep.INITIALIZING
-                            }
-                        }
-                    },
                 )
-
-                OnboardingStep.BLUETOOTH_CHECK -> RadioRequirementScreen(
-                    icon = Icons.Filled.Bluetooth,
-                    badge = "BLUETOOTH MESH",
-                    title = "Enable Bluetooth LE",
-                    subtitle = "Cipher communicates peer-to-peer over Bluetooth Low Energy without servers, cell towers, or Wi-Fi.",
-                    primaryLabel = "Turn On Bluetooth",
-                    onPrimary = {
-                        runCatching {
-                            enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-                        }.onFailure {
-                            runCatching {
-                                enableBtLauncher.launch(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
-                            }
-                        }
-                    },
-                    onSecondary = {
-                        onSetBatteryOptimizationSkipped(true)
-                        step = OnboardingStep.INITIALIZING
-                    },
-                    secondaryLabel = "Continue Offline / Emulator",
-                )
-
-                OnboardingStep.LOCATION_CHECK -> RadioRequirementScreen(
-                    icon = Icons.Filled.LocationOn,
-                    badge = "ANDROID BLE SCANNING",
-                    title = "Enable Location Services",
-                    subtitle = "Android 11 and earlier require Location Services to discover nearby Bluetooth LE mesh packets.",
-                    primaryLabel = "Open Location Settings",
-                    onPrimary = {
-                        runCatching {
-                            enableBtLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-                        }
-                    },
-                    onSecondary = {
-                        step = OnboardingStep.INITIALIZING
-                    },
-                    secondaryLabel = "Skip for Now",
-                )
-
-                OnboardingStep.BATTERY_OPTIMIZATION -> BatteryOptimizationOnboardingScreen(
-                    errorMessage = batteryError,
-                    onRequestExemption = {
-                        batteryError = null
-                        BatteryOptimizationHelper.launchExemptionRequest(
-                            context = context,
-                            launcher = batteryLauncher,
-                            forceListSettings = false,
-                            onError = { batteryError = it },
+                .padding(innerPadding)
+                .statusBarsPadding(),
+        ) {
+            AnimatedContent(
+                targetState = currentStep,
+                transitionSpec = {
+                    fadeIn(tween(220)) togetherWith fadeOut(tween(160))
+                },
+                label = "onboarding_step",
+            ) { step ->
+                when (step) {
+                    OnboardingStep.WELCOME -> {
+                        WelcomeStepContent(
+                            onGetStarted = {
+                                if (hasAllPermissions()) {
+                                    manualContinueFromWelcome = true
+                                    refreshTick += 1
+                                } else {
+                                    permissionLauncher.launch(requiredPermissions.toTypedArray())
+                                }
+                            },
                         )
-                    },
-                    onOpenBatterySettingsList = {
-                        batteryError = null
-                        BatteryOptimizationHelper.launchExemptionRequest(
-                            context = context,
-                            launcher = batteryLauncher,
-                            forceListSettings = true,
-                            onError = { batteryError = it },
+                    }
+
+                    OnboardingStep.RADIO_SERVICES -> {
+                        RadioServicesStepContent(
+                            bluetoothReady = isBluetoothReady(),
+                            locationReady = isLocationReady(),
+                            onEnableBluetooth = {
+                                val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                                runCatching { settingsLauncher.launch(intent) }.onFailure {
+                                    runCatching {
+                                        settingsLauncher.launch(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+                                    }
+                                }
+                            },
+                            onEnableLocation = {
+                                runCatching {
+                                    settingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                                }
+                            },
+                            onSkipInEmulator = {
+                                OnboardingPreferences.markCompleted(context)
+                                onFinished()
+                            },
                         )
-                    },
-                    onCheckAgain = {
-                        batteryError = null
-                        if (BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)) {
-                            step = OnboardingStep.INITIALIZING
-                        } else {
-                            refreshTrigger++
-                        }
-                    },
-                    onSkip = {
-                        onSetBatteryOptimizationSkipped(true)
-                        step = OnboardingStep.INITIALIZING
-                    },
-                )
+                    }
 
-                OnboardingStep.INITIALIZING -> InitializingMeshScreen()
-
-                OnboardingStep.COMPLETE -> Unit
+                    OnboardingStep.BATTERY_EXEMPTION -> {
+                        BatteryExemptionStepContent(
+                            isExempt = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context),
+                            onRequestDirectDialog = {
+                                BatteryOptimizationHelper.launchExemptionRequest(context, settingsLauncher)
+                            },
+                            onOpenBatterySettingsList = {
+                                val listIntent = BatteryOptimizationHelper.buildBatteryOptimizationSettingsIntent()
+                                val launched = runCatching { settingsLauncher.launch(listIntent) }.isSuccess
+                                if (!launched) {
+                                    runCatching {
+                                        settingsLauncher.launch(
+                                            BatteryOptimizationHelper.buildAppDetailsSettingsIntent(context),
+                                        )
+                                    }
+                                }
+                            },
+                            onCheckAgain = {
+                                refreshTick += 1
+                            },
+                            onSkip = {
+                                OnboardingPreferences.markBatterySkipped(context)
+                                OnboardingPreferences.markCompleted(context)
+                                onFinished()
+                            },
+                        )
+                    }
+                }
             }
         }
     }
 }
 
-/**
- * Pixel-exact Screen 1: Cipher Onboarding / Welcome Screen
- * Matches `screen1_onboarding.png` 101%.
- */
 @Composable
-fun CipherWelcomeScreen(
+private fun WelcomeStepContent(
     onGetStarted: () -> Unit,
 ) {
+    val palette = CypherTheme.colors
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .widthIn(max = 460.dp)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 28.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Top Brand Logo + Title + Subtitle
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            CipherChainLogo(size = 62.dp)
             Spacer(modifier = Modifier.height(10.dp))
+            CipherChainLogoIcon(size = 54.dp)
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "Cipher",
                 style = MaterialTheme.typography.displayLarge.copy(
-                    fontSize = 38.sp,
                     fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.6).sp,
+                    fontSize = 36.sp,
+                    letterSpacing = (-0.8).sp,
                 ),
-                color = Color.White,
+                color = palette.textPrimary,
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "Offline Mesh Messenger",
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    fontSize = 15.5.sp,
+                style = MaterialTheme.typography.titleMedium.copy(
                     fontWeight = FontWeight.Medium,
+                    fontSize = 15.5.sp,
                 ),
-                color = Color(0xFFD0D4EC),
+                color = palette.textSecondary,
             )
         }
 
-        // Center Illustration: Dual Angled Phones + Glowing Bluetooth Mesh Ring
-        DualPhoneBluetoothIllustration(
+        Spacer(modifier = Modifier.height(16.dp))
+
+        DualPhoneBluetoothGraphic(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(210.dp)
-                .padding(vertical = 8.dp),
+                .height(185.dp),
         )
 
-        // 3 Feature Rows
+        Spacer(modifier = Modifier.height(14.dp))
+
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            WelcomeFeatureRow(
-                icon = Icons.Outlined.ChatBubbleOutline,
+            OnboardingFeatureRow(
+                icon = Icons.Rounded.ChatBubbleOutline,
                 title = "Chat nearby",
                 subtitle = "Connect with people around you",
             )
-            WelcomeFeatureRow(
-                icon = Icons.Filled.Hub,
+            OnboardingFeatureRow(
+                icon = Icons.Rounded.Hub,
                 title = "Mesh network",
                 subtitle = "Messages relay through peers",
             )
-            WelcomeFeatureRow(
-                icon = Icons.Outlined.Lock,
+            OnboardingFeatureRow(
+                icon = Icons.Rounded.Lock,
                 title = "Private & secure",
                 subtitle = "End-to-end encrypted messages",
             )
         }
 
-        // Pager Dots + Get Started Purple Pill Button
+        Spacer(modifier = Modifier.height(22.dp))
+
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(modifier = Modifier.height(14.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -518,76 +457,84 @@ fun CipherWelcomeScreen(
                     modifier = Modifier
                         .size(8.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFFA78BFA)),
+                        .background(palette.accentLight),
                 )
                 Box(
                     modifier = Modifier
                         .size(7.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF423E61)),
+                        .background(palette.borderSubtle),
                 )
                 Box(
                     modifier = Modifier
                         .size(7.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF423E61)),
+                        .background(palette.borderSubtle),
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(54.dp)
+                    .shadow(
+                        elevation = 18.dp,
+                        shape = RoundedCornerShape(50),
+                        ambientColor = palette.accent,
+                        spotColor = palette.accent,
+                    )
                     .clip(RoundedCornerShape(50))
                     .background(
                         Brush.horizontalGradient(
                             colors = listOf(
-                                Color(0xFF8B5CF6),
-                                Color(0xFF7C3AED),
-                                Color(0xFF6D28D9),
+                                Color(0xFF9061FF),
+                                palette.accent,
+                                Color(0xFF6938EF),
                             ),
                         ),
                     )
                     .border(
                         width = 1.dp,
-                        color = Color(0xFFC4B5FD).copy(alpha = 0.35f),
+                        color = Color.White.copy(alpha = 0.28f),
                         shape = RoundedCornerShape(50),
                     )
                     .clickable(onClick = onGetStarted)
-                    .testTag("onboarding_grant_permissions_button"),
+                    .testTag("onboarding_get_started_button"),
                 contentAlignment = Alignment.Center,
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
                         text = "Get Started",
                         style = MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 16.5.sp,
                             fontWeight = FontWeight.Bold,
+                            fontSize = 16.5.sp,
                         ),
                         color = Color.White,
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
                         contentDescription = null,
                         tint = Color.White,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(19.dp),
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(10.dp))
         }
     }
 }
 
 @Composable
-private fun DualPhoneBluetoothIllustration(
+private fun DualPhoneBluetoothGraphic(
     modifier: Modifier = Modifier,
 ) {
+    val palette = CypherTheme.colors
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center,
@@ -598,144 +545,110 @@ private fun DualPhoneBluetoothIllustration(
             val cx = w * 0.5f
             val cy = h * 0.52f
 
-            // Soft indigo-purple radial glow behind center Bluetooth emblem
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Color(0xFF4F46E5).copy(alpha = 0.38f),
-                        Color(0xFF7C3AED).copy(alpha = 0.16f),
+                        Color(0xFF3B82F6).copy(alpha = 0.25f),
+                        palette.accent.copy(alpha = 0.14f),
                         Color.Transparent,
                     ),
                     center = Offset(cx, cy),
-                    radius = h * 0.54f,
+                    radius = h * 0.52f,
                 ),
-                radius = h * 0.54f,
+                radius = h * 0.52f,
                 center = Offset(cx, cy),
             )
 
-            // 3 Concentric radar rings around center
-            val ringRadii = listOf(h * 0.24f, h * 0.35f, h * 0.46f)
-            ringRadii.forEachIndexed { idx, r ->
+            listOf(0.24f, 0.36f, 0.48f).forEach { factor ->
                 drawCircle(
-                    color = Color(0xFF6366F1).copy(alpha = 0.28f - idx * 0.07f),
-                    radius = r,
+                    color = Color(0xFF60A5FA).copy(alpha = 0.20f),
+                    radius = h * factor,
                     center = Offset(cx, cy),
                     style = Stroke(width = 1.2.dp.toPx()),
                 )
             }
 
-            // Horizontal glowing link line connecting left phone and right phone through Bluetooth center
             drawLine(
                 brush = Brush.horizontalGradient(
                     colors = listOf(
-                        Color.Transparent,
-                        Color(0xFF60A5FA).copy(alpha = 0.65f),
-                        Color(0xFFA78BFA).copy(alpha = 0.65f),
-                        Color.Transparent,
+                        palette.accentLight.copy(alpha = 0.15f),
+                        Color(0xFF60A5FA).copy(alpha = 0.70f),
+                        palette.accentLight.copy(alpha = 0.15f),
                     ),
                 ),
-                start = Offset(w * 0.18f, cy),
-                end = Offset(w * 0.82f, cy),
+                start = Offset(w * 0.20f, cy),
+                end = Offset(w * 0.80f, cy),
                 strokeWidth = 2.dp.toPx(),
+                cap = StrokeCap.Round,
             )
 
-            val phoneW = w * 0.25f
-            val phoneH = h * 0.76f
+            val phoneW = h * 0.46f
+            val phoneH = h * 0.80f
+            val phoneCorner = CornerRadius(14.dp.toPx(), 14.dp.toPx())
 
-            // Left Smartphone tilted at -15 degrees
-            val leftCenter = Offset(w * 0.22f, cy)
-            rotate(degrees = -15f, pivot = leftCenter) {
-                // Phone outer metallic-lavender chassis
+            val leftPivot = Offset(w * 0.23f, cy)
+            rotate(degrees = -16f, pivot = leftPivot) {
                 drawRoundRect(
                     brush = Brush.linearGradient(
-                        colors = listOf(Color(0xFFB3A4F7), Color(0xFF5D4D9C)),
-                        start = Offset(leftCenter.x - phoneW / 2, leftCenter.y - phoneH / 2),
-                        end = Offset(leftCenter.x + phoneW / 2, leftCenter.y + phoneH / 2),
+                        colors = listOf(Color(0xFF312864), Color(0xFF1A163B)),
                     ),
-                    topLeft = Offset(leftCenter.x - phoneW / 2, leftCenter.y - phoneH / 2),
+                    topLeft = Offset(leftPivot.x - phoneW / 2f, leftPivot.y - phoneH / 2f),
                     size = Size(phoneW, phoneH),
-                    cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx()),
+                    cornerRadius = phoneCorner,
                 )
-                // Phone inner dark screen
-                val inset = 3.5.dp.toPx()
                 drawRoundRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(Color(0xFF231B49), Color(0xFF0E0B22)),
-                    ),
-                    topLeft = Offset(leftCenter.x - phoneW / 2 + inset, leftCenter.y - phoneH / 2 + inset),
-                    size = Size(phoneW - inset * 2, phoneH - inset * 2),
-                    cornerRadius = CornerRadius(13.dp.toPx(), 13.dp.toPx()),
-                )
-                // Speaker notch bar
-                drawRoundRect(
-                    color = Color(0xFF14102E),
-                    topLeft = Offset(leftCenter.x - phoneW * 0.16f, leftCenter.y - phoneH / 2 + inset * 2.2f),
-                    size = Size(phoneW * 0.32f, 4.dp.toPx()),
-                    cornerRadius = CornerRadius(4f, 4f),
-                )
-                // Soft purple node glow on screen
-                drawCircle(
-                    color = Color(0xFF7C4DFF).copy(alpha = 0.32f),
-                    radius = phoneW * 0.18f,
-                    center = leftCenter,
+                    color = Color(0xFFA78BFA).copy(alpha = 0.65f),
+                    topLeft = Offset(leftPivot.x - phoneW / 2f, leftPivot.y - phoneH / 2f),
+                    size = Size(phoneW, phoneH),
+                    cornerRadius = phoneCorner,
+                    style = Stroke(width = 2.dp.toPx()),
                 )
             }
 
-            // Right Smartphone tilted at +15 degrees
-            val rightCenter = Offset(w * 0.78f, cy)
-            rotate(degrees = 15f, pivot = rightCenter) {
+            val rightPivot = Offset(w * 0.77f, cy)
+            rotate(degrees = 16f, pivot = rightPivot) {
                 drawRoundRect(
                     brush = Brush.linearGradient(
-                        colors = listOf(Color(0xFFB3A4F7), Color(0xFF5D4D9C)),
-                        start = Offset(rightCenter.x - phoneW / 2, rightCenter.y - phoneH / 2),
-                        end = Offset(rightCenter.x + phoneW / 2, rightCenter.y + phoneH / 2),
+                        colors = listOf(Color(0xFF312864), Color(0xFF1A163B)),
                     ),
-                    topLeft = Offset(rightCenter.x - phoneW / 2, rightCenter.y - phoneH / 2),
+                    topLeft = Offset(rightPivot.x - phoneW / 2f, rightPivot.y - phoneH / 2f),
                     size = Size(phoneW, phoneH),
-                    cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx()),
-                )
-                val inset = 3.5.dp.toPx()
-                drawRoundRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(Color(0xFF271D54), Color(0xFF0E0B22)),
-                    ),
-                    topLeft = Offset(rightCenter.x - phoneW / 2 + inset, rightCenter.y - phoneH / 2 + inset),
-                    size = Size(phoneW - inset * 2, phoneH - inset * 2),
-                    cornerRadius = CornerRadius(13.dp.toPx(), 13.dp.toPx()),
+                    cornerRadius = phoneCorner,
                 )
                 drawRoundRect(
-                    color = Color(0xFF14102E),
-                    topLeft = Offset(rightCenter.x - phoneW * 0.16f, rightCenter.y - phoneH / 2 + inset * 2.2f),
-                    size = Size(phoneW * 0.32f, 4.dp.toPx()),
-                    cornerRadius = CornerRadius(4f, 4f),
-                )
-                drawCircle(
-                    color = Color(0xFF8B5CF6).copy(alpha = 0.35f),
-                    radius = phoneW * 0.18f,
-                    center = rightCenter,
+                    color = Color(0xFFA78BFA).copy(alpha = 0.65f),
+                    topLeft = Offset(rightPivot.x - phoneW / 2f, rightPivot.y - phoneH / 2f),
+                    size = Size(phoneW, phoneH),
+                    cornerRadius = phoneCorner,
+                    style = Stroke(width = 2.dp.toPx()),
                 )
             }
         }
 
-        // Center Glowing Blue Circle with White Bluetooth Icon
         Box(
             modifier = Modifier
-                .size(56.dp)
+                .size(54.dp)
+                .shadow(
+                    elevation = 16.dp,
+                    shape = CircleShape,
+                    ambientColor = Color(0xFF3B82F6),
+                    spotColor = Color(0xFF3B82F6),
+                )
                 .clip(CircleShape)
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
+                            Color(0xFF3B82F6),
                             Color(0xFF2563EB),
                             Color(0xFF1D4ED8),
-                            Color(0xFF312E81),
                         ),
                     ),
                 )
-                .border(1.5.dp, Color(0xFF60A5FA).copy(alpha = 0.65f), CircleShape),
+                .border(1.5.dp, Color(0xFF93C5FD).copy(alpha = 0.6f), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Filled.Bluetooth,
+                imageVector = Icons.Rounded.Bluetooth,
                 contentDescription = "Bluetooth Mesh",
                 tint = Color.White,
                 modifier = Modifier.size(28.dp),
@@ -745,443 +658,265 @@ private fun DualPhoneBluetoothIllustration(
 }
 
 @Composable
-private fun WelcomeFeatureRow(
+private fun OnboardingFeatureRow(
     icon: ImageVector,
     title: String,
     subtitle: String,
 ) {
+    val palette = CypherTheme.colors
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(Color(0xFF191B2C))
-                .border(1.dp, Color(0xFF2A2E47), CircleShape),
+                .size(40.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0xFF1C1F33))
+                .border(1.dp, palette.borderSubtle, RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = icon,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(22.dp),
+                contentDescription = title,
+                tint = palette.textPrimary,
+                modifier = Modifier.size(20.dp),
             )
         }
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+
+        Column {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium.copy(
-                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
+                    fontSize = 15.5.sp,
                 ),
-                color = Color.White,
+                color = palette.textPrimary,
             )
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontSize = 13.5.sp,
                 ),
-                color = Color(0xFFA5AAC4),
+                color = palette.textSecondary,
             )
         }
     }
 }
 
 @Composable
-private fun RadioRequirementScreen(
-    icon: ImageVector,
-    badge: String,
-    title: String,
-    subtitle: String,
-    primaryLabel: String,
-    onPrimary: () -> Unit,
-    secondaryLabel: String,
-    onSecondary: () -> Unit,
+private fun RadioServicesStepContent(
+    bluetoothReady: Boolean,
+    locationReady: Boolean,
+    onEnableBluetooth: () -> Unit,
+    onEnableLocation: () -> Unit,
+    onSkipInEmulator: () -> Unit,
 ) {
-    val palette = LocalCypherPalette.current
-
+    val palette = CypherTheme.colors
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .widthIn(max = 520.dp)
             .padding(24.dp),
         verticalArrangement = Arrangement.SpaceBetween,
-        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(modifier = Modifier.height(24.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(
+                text = "Enable Mesh Radios",
+                style = MaterialTheme.typography.displayMedium,
+                color = palette.textPrimary,
+            )
+            Text(
+                text = "Cipher uses Bluetooth Low Energy to discover peers and relay encrypted packets without internet.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = palette.textSecondary,
+            )
 
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Box(
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = palette.surface,
                 modifier = Modifier
-                    .size(84.dp)
-                    .clip(CircleShape)
-                    .background(palette.accentSoft)
-                    .border(1.5.dp, palette.accent.copy(alpha = 0.45f), CircleShape),
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(18.dp)),
             ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = palette.accent,
-                    modifier = Modifier.size(40.dp),
-                )
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Bluetooth,
+                            contentDescription = null,
+                            tint = if (bluetoothReady) palette.success else palette.accentLight,
+                        )
+                        Column {
+                            Text("Bluetooth Adapter", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                            Text(
+                                if (bluetoothReady) "Active & ready" else "Required for BLE mesh",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.textSecondary,
+                            )
+                        }
+                    }
+                    if (!bluetoothReady) {
+                        Button(
+                            onClick = onEnableBluetooth,
+                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                        ) {
+                            Text("Enable", color = Color.White)
+                        }
+                    } else {
+                        Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = palette.success)
+                    }
+                }
             }
 
-            Text(
-                text = badge,
-                style = MaterialTheme.typography.labelMedium,
-                color = palette.accentSecondary,
-            )
-
-            Text(
-                text = title,
-                style = MaterialTheme.typography.headlineLarge,
-                color = palette.textPrimary,
-                textAlign = TextAlign.Center,
-            )
-
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = palette.textSecondary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 8.dp),
-            )
+            if (!locationReady) {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = palette.surface,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, palette.borderSubtle, RoundedCornerShape(18.dp)),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = palette.warning)
+                            Column {
+                                Text("Location Services", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                                Text("Required by Android for BLE scanning", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
+                            }
+                        }
+                        Button(
+                            onClick = onEnableLocation,
+                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                        ) {
+                            Text("Enable", color = Color.White)
+                        }
+                    }
+                }
+            }
         }
 
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+        OutlinedButton(
+            onClick = onSkipInEmulator,
+            shape = RoundedCornerShape(50),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp),
         ) {
-            Button(
-                onClick = onPrimary,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp)
-                    .testTag("onboarding_radio_primary_button"),
-                shape = RoundedCornerShape(50),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = palette.accent,
-                    contentColor = palette.accentOnPrimary,
-                ),
-            ) {
-                Text(
-                    text = primaryLabel,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-
-            OutlinedButton(
-                onClick = onSecondary,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("onboarding_radio_secondary_button"),
-                shape = RoundedCornerShape(50),
-            ) {
-                Text(
-                    text = secondaryLabel,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = palette.textSecondary,
-                )
-            }
+            Text("Continue to Cipher", color = palette.textPrimary)
         }
     }
 }
 
 @Composable
-private fun BatteryOptimizationOnboardingScreen(
-    errorMessage: String?,
-    onRequestExemption: () -> Unit,
+private fun BatteryExemptionStepContent(
+    isExempt: Boolean,
+    onRequestDirectDialog: () -> Unit,
     onOpenBatterySettingsList: () -> Unit,
     onCheckAgain: () -> Unit,
     onSkip: () -> Unit,
 ) {
-    val palette = LocalCypherPalette.current
-
+    val palette = CypherTheme.colors
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .widthIn(max = 520.dp)
-            .padding(horizontal = 24.dp, vertical = 20.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(palette.accentSubtle)
+                    .border(1.dp, palette.accent.copy(alpha = 0.45f), RoundedCornerShape(16.dp)),
+                contentAlignment = Alignment.Center,
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(palette.warningAmberSoft)
-                        .border(1.dp, palette.warningAmber.copy(alpha = 0.45f), RoundedCornerShape(14.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.BatteryChargingFull,
-                        contentDescription = null,
-                        tint = palette.warningAmber,
-                        modifier = Modifier.size(26.dp),
-                    )
-                }
-                Column {
-                    Text(
-                        text = "BACKGROUND RELIABILITY",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = palette.warningAmber,
-                    )
-                    Text(
-                        text = "Unrestricted Mesh Relay",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = palette.textPrimary,
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Rounded.BatterySaver,
+                    contentDescription = null,
+                    tint = palette.accentLight,
+                    modifier = Modifier.size(30.dp),
+                )
             }
 
             Text(
-                text = "Android's Doze mode suspends background Bluetooth LE scanning and disconnects active mesh links when your screen turns off.",
-                style = MaterialTheme.typography.bodyMedium,
+                text = "Background Mesh Reliability",
+                style = MaterialTheme.typography.displayMedium,
+                color = palette.textPrimary,
+            )
+            Text(
+                text = "Android's battery optimizer can pause Bluetooth LE scanning when your screen is off. Allow unrestricted background battery usage so Cipher can relay messages reliably.",
+                style = MaterialTheme.typography.bodyLarge,
                 color = palette.textSecondary,
             )
-
-            Surface(
-                color = palette.surface1,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(16.dp)),
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Power,
-                        contentDescription = null,
-                        tint = palette.warningAmber,
-                        modifier = Modifier
-                            .padding(top = 2.dp)
-                            .size(22.dp),
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = "Battery Optimization Detected",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = palette.textPrimary,
-                        )
-                        Text(
-                            text = "Without a battery optimization exemption, incoming Noise XX messages and multi-hop packets may be delayed until you reopen Cipher.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.textSecondary,
-                        )
-                    }
-                }
-            }
-
-            Surface(
-                color = palette.encryptedGreenSoft,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, palette.encryptedGreen.copy(alpha = 0.35f), RoundedCornerShape(16.dp)),
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        tint = palette.encryptedGreen,
-                        modifier = Modifier
-                            .padding(top = 2.dp)
-                            .size(22.dp),
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = "Benefits of Unrestricted Mode",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = palette.textPrimary,
-                        )
-                        Text(
-                            text = "• Instant delivery of encrypted private messages while screen is locked\n• Reliable multi-hop relay (up to 7 hops) for nearby peers\n• Persistent Noise XX sessions without repeated handshakes",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.textSecondary,
-                        )
-                    }
-                }
-            }
-
-            if (!errorMessage.isNullOrBlank()) {
-                Surface(
-                    color = palette.dangerRedSoft,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = errorMessage,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.dangerRed,
-                        modifier = Modifier.padding(12.dp),
-                    )
-                }
-            }
         }
 
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
-                onClick = onRequestExemption,
+                onClick = onRequestDirectDialog,
+                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                shape = RoundedCornerShape(50),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp)
-                    .testTag("disable_battery_optimization_button"),
-                shape = RoundedCornerShape(50),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = palette.accent,
-                    contentColor = palette.accentOnPrimary,
-                ),
+                    .height(52.dp)
+                    .testTag("battery_disable_optimization_button"),
             ) {
-                Icon(
-                    imageVector = Icons.Filled.BatteryChargingFull,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Disable Battery Optimization",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                )
+                Text("Disable Battery Optimization", color = Color.White, fontWeight = FontWeight.Bold)
             }
 
             OutlinedButton(
                 onClick = onOpenBatterySettingsList,
+                shape = RoundedCornerShape(50),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
-                    .testTag("open_battery_settings_button"),
-                shape = RoundedCornerShape(50),
+                    .testTag("battery_open_settings_button"),
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Settings,
-                    contentDescription = null,
-                    tint = palette.textPrimary,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Open System Battery Settings",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = palette.textPrimary,
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
-                    contentDescription = null,
-                    tint = palette.textMuted,
-                    modifier = Modifier.size(15.dp),
-                )
+                Text("Open System Battery Settings", color = palette.textPrimary)
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                TextButton(
+                OutlinedButton(
                     onClick = onCheckAgain,
+                    shape = RoundedCornerShape(50),
                     modifier = Modifier
                         .weight(1f)
-                        .testTag("battery_check_again_button"),
+                        .height(46.dp),
                 ) {
-                    Text(
-                        text = "Check Status",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = palette.textSecondary,
-                    )
+                    Text("Check Again", color = palette.textSecondary)
                 }
-
-                TextButton(
+                OutlinedButton(
                     onClick = onSkip,
+                    shape = RoundedCornerShape(50),
                     modifier = Modifier
                         .weight(1f)
+                        .height(46.dp)
                         .testTag("battery_skip_button"),
                 ) {
-                    Text(
-                        text = "Skip for Now",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = palette.textMuted,
-                    )
+                    Text("Skip for Now", color = palette.textSecondary)
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun InitializingMeshScreen() {
-    val palette = LocalCypherPalette.current
-    val pulseTransition = rememberInfiniteTransition(label = "mesh_init_pulse")
-    val pulseScale by pulseTransition.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "pulse_scale",
-    )
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        modifier = Modifier.padding(32.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .scale(pulseScale)
-                .clip(CircleShape)
-                .background(palette.accentSoft)
-                .border(1.5.dp, palette.accent, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            CircularProgressIndicator(
-                color = palette.accent,
-                strokeWidth = 2.5.dp,
-                modifier = Modifier.size(44.dp),
-            )
-        }
-        Text(
-            text = "STARTING CIPHER MESH",
-            style = MaterialTheme.typography.labelMedium.copy(fontFamily = CypherMonoFontFamily),
-            color = palette.accentSecondary,
-        )
-        Text(
-            text = "Initializing offline mesh radio…",
-            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = CypherDisplayFontFamily),
-            color = palette.textSecondary,
-            textAlign = TextAlign.Center,
-        )
     }
 }

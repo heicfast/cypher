@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.google.devtools.ksp)
 }
 
 android {
@@ -14,8 +15,8 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+
         ndk {
-            // Same ABI set as the bitchat Android pipeline.
             abiFilters += listOf("arm64-v8a", "x86_64", "armeabi-v7a", "x86")
         }
     }
@@ -52,6 +53,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.appcompat)
     implementation(libs.kotlinx.coroutines.android)
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -59,6 +61,11 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.material.icons.extended)
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    "ksp"(libs.androidx.room.compiler)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
@@ -67,14 +74,3 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
-
-// ---------------------------------------------------------------------------
-// Rust core (libcypher.so)
-//
-// Native libraries are checked in under src/main/jniLibs (one per ABI,
-// release profile), exactly like bitchat's prebuilt arti static libraries.
-// Integrity is verified by tools/verify-native-checksums.sh (CI + pre-push).
-// Rebuild from source with: `just build-android` or `cargo ndk ...` — see
-// Justfile and the rust.yml workflow (android-lib job) which compiles the
-// core from source on every push.
-// ---------------------------------------------------------------------------

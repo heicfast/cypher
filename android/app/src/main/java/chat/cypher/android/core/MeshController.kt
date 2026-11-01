@@ -1,1299 +1,1385 @@
 package chat.cypher.android.core
 
-import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.util.Base64
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import chat.cypher.android.MainActivity
-import chat.cypher.android.MeshForegroundService
 import chat.cypher.android.R
 import chat.cypher.android.ble.BleLinkLayer
 import chat.cypher.android.ble.MeshEvents
-import chat.cypher.android.onboarding.hasAllMeshPermissions
-import chat.cypher.android.ui.theme.ThemePreference
-import java.io.File
-import java.util.Locale
-import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
-
-data class PeerUiModel(
-    val peerIdHex: String,
-    val nickname: String,
-    val sessionState: String,
-    val isKnown: Boolean,
-    val lastSeenMs: Long,
-    val rssi: Int? = null,
-    val hops: Int = 1,
-    val distanceMeters: Int = PeerIdentity.estimateDistanceMeters(rssi, hops),
-    val isDirectlyConnected: Boolean = false,
-    val isFavorite: Boolean = false,
-    val isVerified: Boolean = false,
-    val isBlocked: Boolean = false,
-    val fingerprintHex: String = "",
-)
+import java.io.File
+import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 data class SlashCommandSpec(
     val command: String,
+    val aliases: List<String> = emptyList(),
     val syntax: String,
     val description: String,
 )
 
-sealed class SlashCommandOutcome {
-    data object NotASlashCommand : SlashCommandOutcome()
-    data class Handled(val feedback: String? = null) : SlashCommandOutcome()
-    data class OpenVerificationSheet(val peerHex: String?) : SlashCommandOutcome()
-}
-
 /**
- * Coordinates the Rust mesh engine (via [CypherBridge] & [MeshRuntime]),
- * the Android BLE link layer ([BleLinkLayer]), and persistent storage ([MeshStore]).
+ * Coordinates the native Rust mesh engine (`CypherBridge`), the Android `BleLinkLayer`,
+ * `MeshGraphService`, `ChannelCrypto`, `VerificationService`, Store-and-Forward outbox,
+ * and `MeshStore` Room SQLite persistence.
  */
-class MeshController(private val appContext: Context) {
-    companion object {
-        private const val TAG = "MeshController"
-        private const val PUMP_INTERVAL_MS = 250L
-        private const val MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024 // 10 MiB cap
-        private const val DM_NOTIFICATION_CHANNEL = "cypher_dm_alerts"
-        private const val DM_NOTIFICATION_BASE_ID = 5200
+object MeshController {
+    private const val TAG = "CypherMeshCtrl"
+    private const val MSG_NOTIFICATION_CHANNEL = "cypher_incoming_messages"
 
-        private val WIRE_REPLY_REGEX = Regex("^> @([^:\\n]{1,32}): ([^\\n]{1,120})\\n([\\s\\S]*)$")
-        private val WIRE_CHANNEL_REGEX = Regex("^\\[(#[a-zA-Z0-9_-]{1,32})]\\s*([\\s\\S]*)$")
+    val store: MeshStore
+        get() = MeshStore
 
-        val SLASH_COMMANDS: List<SlashCommandSpec> = listOf(
-            SlashCommandSpec("/hug", "/hug [peer]", "Send a warm mesh hug to the channel or peer"),
-            SlashCommandSpec("/slap", "/slap [peer]", "Slap someone around a bit with a large trout"),
-            SlashCommandSpec("/shrug", "/shrug [message]", "Append ¯\\_(ツ)_/¯ to your message"),
-            SlashCommandSpec("/ping", "/ping", "Send an encrypted Noise / mesh latency probe"),
-            SlashCommandSpec("/verify", "/verify", "Inspect & verify SHA-256 safety numbers"),
-            SlashCommandSpec("/nick", "/nick <name>", "Change your mesh broadcast nickname"),
-            SlashCommandSpec("/w", "/w", "List online mesh peers in range"),
-            SlashCommandSpec("/clear", "/clear", "Clear messages in the active conversation"),
-            SlashCommandSpec("/block", "/block [@peer]", "Mute & block messages from a peer"),
-            SlashCommandSpec("/unblock", "/unblock [@peer]", "Unblock a previously muted peer"),
-        )
-    }
+    val myPeerIdHex: StateFlow<String>
+        get() = MeshStore.localIdentityHex
+
+    val myFingerprintHex: StateFlow<String>
+        get() = MeshStore.localFingerprintHex
+
+    val SLASH_COMMANDS: List<SlashCommandSpec> = listOf(
+        SlashCommandSpec("/join", listOf("/j"), "/join #channel [password]", "Join or create a mesh/geohash channel"),
+        SlashCommandSpec("/leave", emptyList(), "/leave", "Leave the current channel"),
+        SlashCommandSpec("/msg", listOf("/m", "/dm"), "/msg @nickname [message]", "Start or send an encrypted direct message"),
+        SlashCommandSpec("/who", listOf("/w"), "/who", "List peers currently reachable on the BLE mesh"),
+        SlashCommandSpec("/channels", emptyList(), "/channels", "List joined and bookmarked channels"),
+        SlashCommandSpec("/pass", emptyList(), "/pass [password]", "Set or clear password for current channel"),
+        SlashCommandSpec("/transfer", emptyList(), "/transfer @nickname", "Transfer channel ownership to a peer"),
+        SlashCommandSpec("/nick", emptyList(), "/nick <nickname>", "Change your mesh nickname"),
+        SlashCommandSpec("/verify", emptyList(), "/verify [@nickname]", "Send a cryptographic verification challenge"),
+        SlashCommandSpec("/route", emptyList(), "/route @nickname", "Compute shortest multi-hop mesh route to peer"),
+        SlashCommandSpec("/fav", emptyList(), "/fav @nickname", "Toggle favorite status for a peer"),
+        SlashCommandSpec("/block", emptyList(), "/block [@nickname]", "Block a peer or list blocked peers"),
+        SlashCommandSpec("/unblock", emptyList(), "/unblock @nickname", "Unblock a peer"),
+        SlashCommandSpec("/hug", emptyList(), "/hug @nickname", "Send a warm hug action"),
+        SlashCommandSpec("/slap", emptyList(), "/slap @nickname", "Slap a peer around a bit with a large trout"),
+        SlashCommandSpec("/shrug", emptyList(), "/shrug [message]", "Append a shrug emoticon"),
+        SlashCommandSpec("/ping", emptyList(), "/ping", "Broadcast a mesh latency ping"),
+        SlashCommandSpec("/announce", emptyList(), "/announce", "Broadcast immediate presence announcement"),
+        SlashCommandSpec("/clear", emptyList(), "/clear", "Clear messages in the active conversation"),
+        SlashCommandSpec("/help", emptyList(), "/help", "Show all available IRC slash commands"),
+    )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val coreLock = Any()
+    private val engineLock = Any()
+    private val started = AtomicBoolean(false)
+    private val handleRef = AtomicLong(0L)
+    private val pendingChallenges = ConcurrentHashMap<String, String>()
 
-    val store: MeshStore = MeshStore(appContext)
-
-    private var nodeHandle: Long = 0L
-    private var tickJob: Job? = null
+    private var bleLayer: BleLinkLayer? = null
     private var unsubscribeEvents: (() -> Unit)? = null
-    private val peerHopCounts = mutableMapOf<String, Int>()
+    private var appContext: Context? = null
 
-    private val _myPeerIdHex = MutableStateFlow("")
-    val myPeerIdHex: StateFlow<String> = _myPeerIdHex.asStateFlow()
-
-    private val _myStaticPublicKeyHex = MutableStateFlow("")
-    val myStaticPublicKeyHex: StateFlow<String> = _myStaticPublicKeyHex.asStateFlow()
-
-    private val _myFingerprintHex = MutableStateFlow(MeshStore.DEFAULT_LOCAL_FINGERPRINT_HEX)
-    val myFingerprintHex: StateFlow<String> = _myFingerprintHex.asStateFlow()
-
-    private val _nickname = MutableStateFlow(store.loadNickname())
-    val nickname: StateFlow<String> = _nickname.asStateFlow()
-
-    private val _coreVersion = MutableStateFlow("1.0.0")
-    val coreVersion: StateFlow<String> = _coreVersion.asStateFlow()
-
-    private val _peers = MutableStateFlow<List<PeerUiModel>>(emptyList())
-    val peers: StateFlow<List<PeerUiModel>> = _peers.asStateFlow()
-
-    private val _activeConversationKey = MutableStateFlow<String?>(null)
-    val activeConversationKey: StateFlow<String?> = _activeConversationKey.asStateFlow()
-
-    private val _isMeshRunning = MutableStateFlow(false)
-    val isMeshRunning: StateFlow<Boolean> = _isMeshRunning.asStateFlow()
-
-    private val _lastAnnounceTimeMs = MutableStateFlow(0L)
-    val lastAnnounceTimeMs: StateFlow<Long> = _lastAnnounceTimeMs.asStateFlow()
-
-    val conversations: StateFlow<Map<String, List<ChatMessage>>> = store.conversations
-    val unreadCounts: StateFlow<Map<String, Int>> = store.unreadCounts
-    val favorites: StateFlow<Set<String>> = store.favorites
-    val verifiedPeers: StateFlow<Map<String, String>> = store.verifiedPeers
-    val blockedPeers: StateFlow<Set<String>> = store.blockedPeers
-    val knownPeerNames: StateFlow<Map<String, String>> = store.knownPeerNames
-    val pinnedConversations: StateFlow<Set<String>> = store.pinnedConversations
-    val mutedConversations: StateFlow<Set<String>> = store.mutedConversations
-    val markedUnreadConversations: StateFlow<Set<String>> = store.markedUnreadConversations
-    val bookmarkedChannels: StateFlow<Set<String>> = store.bookmarkedChannels
-    val joinedChannels: StateFlow<Set<String>> = store.joinedChannels
-    val drafts: StateFlow<Map<String, String>> = store.drafts
-    val themePreference: StateFlow<ThemePreference> = store.themePrefFlow
-    val backgroundServiceEnabled: StateFlow<Boolean> = store.backgroundServiceEnabled
-    val batteryOptimizationSkipped: StateFlow<Boolean> = store.batteryOptimizationSkipped
-
-    val bleLinkLayer = BleLinkLayer(appContext)
-
-    val connectedBleAddresses: StateFlow<Set<String>> = bleLinkLayer.connectedAddresses
-
-    init {
-        ensureDmNotificationChannel()
-        unsubscribeEvents = MeshEvents.subscribe(::onEngineEvents)
-        initNativeNode()
-    }
-
-    private fun initNativeNode() {
-        synchronized(coreLock) {
-            nodeHandle = MeshRuntime.start(appContext, _nickname.value)
-            if (nodeHandle != 0L) {
-                refreshStateFromEngineLocked()
-                for (fav in store.favorites.value) {
-                    runCatching { CypherBridge.nativeSetPeerFavorite(nodeHandle, fav, true) }
-                }
-                for ((peerHex, _) in store.verifiedPeers.value) {
-                    runCatching { CypherBridge.nativeSetPeerVerified(nodeHandle, peerHex, true) }
-                }
-                for (blocked in store.blockedPeers.value) {
-                    runCatching { CypherBridge.nativeBlockPeer(nodeHandle, blocked) }
-                }
-            } else {
-                val seed = store.loadOrNullIdentitySeed() ?: ByteArray(32).also {
-                    java.security.SecureRandom().nextBytes(it)
-                    store.persistIdentitySeed(it)
-                }
-                val peerHex = seed.take(8).joinToString("") { "%02x".format(it) }
-                val fp = MeshStore.DEFAULT_LOCAL_FINGERPRINT_HEX
-                _myPeerIdHex.value = peerHex
-                _myStaticPublicKeyHex.value = fp
-                _myFingerprintHex.value = fp
-            }
+    fun filterCommandSuggestions(input: String): List<SlashCommandSpec> {
+        val trimmed = input.trimStart()
+        if (!trimmed.startsWith("/")) return emptyList()
+        val token = trimmed.substringBefore(' ').lowercase(Locale.US)
+        if (trimmed.contains(' ')) return emptyList()
+        return SLASH_COMMANDS.filter { spec ->
+            spec.command.startsWith(token) || spec.aliases.any { it.startsWith(token) }
         }
     }
 
-    fun startMesh() {
-        val radioStarted = bleLinkLayer.start()
-        _isMeshRunning.value = radioStarted || nodeHandle != 0L
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                val out = runCatching { CypherBridge.nativeAnnounce(nodeHandle) }.getOrNull()
-                emitEngineOutputLocked(out)
-                refreshStateFromEngineLocked()
-                _lastAnnounceTimeMs.value = System.currentTimeMillis()
-            }
+    fun start(context: Context) {
+        val appCtx = context.applicationContext
+        appContext = appCtx
+        MeshStore.attachDatabase(appCtx)
+        MeshStore.loadOrCreateSeed(appCtx)
+        if (!started.compareAndSet(false, true)) return
+
+        val nick = MeshStore.nickname.value
+
+        unsubscribeEvents?.invoke()
+        unsubscribeEvents = MeshEvents.subscribe { eventsJson ->
+            parseEngineEvents(eventsJson)
         }
-        if (tickJob?.isActive != true) {
-            tickJob = scope.launch {
-                var tickCounter = 0
-                while (isActive) {
-                    delay(PUMP_INTERVAL_MS)
-                    synchronized(coreLock) {
-                        if (nodeHandle != 0L) {
-                            bleLinkLayer.tick()
-                            tickCounter++
-                            if (tickCounter % 8 == 0) {
-                                refreshStateFromEngineLocked()
-                            }
-                        }
+
+        if (CypherBridge.isLoaded) {
+            val h = synchronized(engineLock) {
+                MeshRuntime.start(appCtx, nick)
+            }
+            handleRef.set(h)
+            refreshEngineState()
+        }
+
+        val layer = BleLinkLayer(appCtx)
+        bleLayer = layer
+        layer.start()
+
+        scope.launch {
+            while (isActive && started.get()) {
+                val h = handleRef.get()
+                if (h != 0L && CypherBridge.isLoaded) {
+                    val response = synchronized(engineLock) {
+                        CypherBridge.nativeTick(h)
                     }
+                    processNativeResponse(response)
+                    refreshEngineState()
                 }
+                delay(250L)
             }
         }
     }
 
-    fun stopMesh() {
-        tickJob?.cancel()
-        tickJob = null
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                val out = runCatching { CypherBridge.nativeStopServices(nodeHandle) }.getOrNull()
-                emitEngineOutputLocked(out)
-            }
-        }
-        bleLinkLayer.stop()
-        _isMeshRunning.value = false
-    }
-
-    fun announceNow(): Boolean {
-        return synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                val out = runCatching { CypherBridge.nativeAnnounce(nodeHandle) }.getOrNull()
-                emitEngineOutputLocked(out)
-                refreshStateFromEngineLocked()
-                _lastAnnounceTimeMs.value = System.currentTimeMillis()
-                true
-            } else {
-                false
+    fun stop() {
+        if (!started.compareAndSet(true, false)) return
+        unsubscribeEvents?.invoke()
+        unsubscribeEvents = null
+        bleLayer?.stop()
+        bleLayer = null
+        val h = handleRef.getAndSet(0L)
+        if (h != 0L && CypherBridge.isLoaded) {
+            synchronized(engineLock) {
+                MeshRuntime.stop()
             }
         }
     }
 
-    fun setBackgroundServiceEnabled(enabled: Boolean) {
-        store.setBackgroundServiceEnabled(enabled)
-        if (enabled) {
-            if (hasAllMeshPermissions(appContext)) {
-                MeshForegroundService.start(appContext)
+    fun updateNickname(context: Context, nickname: String) {
+        MeshStore.updateNickname(context, nickname)
+        val h = handleRef.get()
+        if (h != 0L && CypherBridge.isLoaded) {
+            val resp = synchronized(engineLock) {
+                CypherBridge.nativeSetNickname(h, MeshStore.nickname.value)
             }
-        } else {
-            val stopIntent = Intent(appContext, MeshForegroundService::class.java).apply {
-                action = MeshForegroundService.ACTION_STOP
-            }
-            runCatching { appContext.startService(stopIntent) }
+            processNativeResponse(resp)
+            refreshEngineState()
         }
     }
 
-    fun setThemePreference(preference: ThemePreference) {
-        store.setThemePreference(preference)
-    }
-
-    fun setBatteryOptimizationSkipped(skipped: Boolean) {
-        store.setBatteryOptimizationSkipped(skipped)
-    }
-
-    fun toggleBookmarkChannel(channelTag: String): Boolean =
-        store.toggleBookmarkChannel(channelTag)
-
-    fun joinChannel(channelTag: String): String =
-        store.joinChannel(channelTag)
-
-    fun updateNickname(newName: String) {
-        val clean = newName.trim().take(24)
-        if (clean.isEmpty()) return
-        _nickname.value = clean
-        store.saveNickname(clean)
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                val out = runCatching { CypherBridge.nativeSetNickname(nodeHandle, clean) }.getOrNull()
-                emitEngineOutputLocked(out)
-                refreshStateFromEngineLocked()
-                _lastAnnounceTimeMs.value = System.currentTimeMillis()
+    fun rotateIdentity(context: Context) {
+        val appCtx = context.applicationContext
+        MeshStore.rotateIdentitySeed(appCtx)
+        val nick = MeshStore.nickname.value
+        if (CypherBridge.isLoaded) {
+            val newHandle = synchronized(engineLock) {
+                MeshRuntime.panicReset(appCtx, nick)
             }
+            handleRef.set(newHandle)
+            refreshEngineState()
+            announceNow()
         }
     }
 
-    fun openConversation(conversationKey: String?) {
-        _activeConversationKey.value = conversationKey
-        if (conversationKey != null) {
-            val unreadIncoming = store.markConversationRead(conversationKey)
-            if (!conversationKey.startsWith("#") && unreadIncoming.isNotEmpty()) {
-                synchronized(coreLock) {
-                    if (nodeHandle != 0L) {
-                        val seenIds = HashSet<String>()
-                        for (msg in unreadIncoming) {
-                            if (seenIds.add(msg.id)) {
-                                val out = runCatching {
-                                    CypherBridge.nativeSendReadReceipt(nodeHandle, conversationKey, msg.id)
-                                }.getOrNull()
-                                emitEngineOutputLocked(out)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fun sendChannelMessage(
-        channelKey: String = MeshStore.BROADCAST_CONVERSATION_KEY,
+    fun sendMessage(
         text: String,
-        replyTo: ReplyReference? = null,
+        replyToMessageId: String? = null,
+        replyPreview: String? = null,
     ) {
-        val clean = text.trim()
-        if (clean.isEmpty()) return
-        val normalizedChannel = store.normalizeChannelKey(channelKey)
-        val wireBody = encodeWireReply(clean, replyTo)
-        val wireText = if (normalizedChannel == MeshStore.BROADCAST_CONVERSATION_KEY) {
-            wireBody
-        } else {
-            "[$normalizedChannel] $wireBody"
-        }
-        val msgId = UUID.randomUUID().toString().uppercase()
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
 
-        store.appendMessage(
+        if (trimmed.startsWith("/")) {
+            if (handleSlashCommand(trimmed)) return
+        }
+
+        val activeConv = MeshStore.activeConversation.value
+        val now = System.currentTimeMillis()
+        val h = handleRef.get()
+
+        val wireText = if (replyPreview != null) {
+            "> ${replyPreview.take(60)}\n$trimmed"
+        } else {
+            trimmed
+        }
+
+        if (activeConv.startsWith("#")) {
+            val normalizedChannel = Geohash.normalizeTag(activeConv)
+            val password = MeshStore.getChannelPassword(normalizedChannel)
+            val channelPayload = if (!password.isNullOrBlank()) {
+                ChannelCrypto.encryptChannelPayload(normalizedChannel, password, wireText)
+            } else {
+                wireText
+            }
+            val payloadWithChannel = if (normalizedChannel == MeshStore.PUBLIC_CONVERSATION) {
+                channelPayload
+            } else {
+                "[$normalizedChannel] $channelPayload"
+            }
+
+            if (h != 0L && CypherBridge.isLoaded) {
+                val resp = synchronized(engineLock) {
+                    CypherBridge.nativeSendPublicMessage(h, payloadWithChannel)
+                }
+                MeshStore.recordTraffic(packets = 1, bytes = payloadWithChannel.length.toLong())
+                processNativeResponse(resp)
+            }
+            val msgId = UUID.randomUUID().toString()
+            MeshStore.appendMessage(
+                ChatMessage(
+                    id = msgId,
+                    conversationKey = normalizedChannel,
+                    senderHex = MeshStore.localIdentityHex.value.ifEmpty { "self" },
+                    senderLabel = MeshStore.nickname.value,
+                    text = trimmed,
+                    timestampMs = now,
+                    outgoing = true,
+                    encrypted = !password.isNullOrBlank(),
+                    hops = 0,
+                    delivery = DeliveryStatus.SENT,
+                    replyToMessageId = replyToMessageId,
+                    replyPreview = replyPreview,
+                ),
+            )
+            if (MeshStore.peers.value.any { it.connected }) {
+                MeshStore.markMessageDelivered(msgId, DeliveryStatus.DELIVERED)
+            }
+        } else {
+            sendPrivateMessageInternal(
+                peerKeyHex = activeConv,
+                displayText = trimmed,
+                wirePayload = wireText,
+                kind = MessageKind.TEXT,
+                replyToMessageId = replyToMessageId,
+                replyPreview = replyPreview,
+            )
+        }
+    }
+
+    private fun sendPrivateMessageInternal(
+        peerKeyHex: String,
+        displayText: String,
+        wirePayload: String,
+        kind: MessageKind = MessageKind.TEXT,
+        attachmentPath: String? = null,
+        attachmentMeta: String? = null,
+        replyToMessageId: String? = null,
+        replyPreview: String? = null,
+    ) {
+        val normPeer = peerKeyHex.lowercase(Locale.US)
+        val now = System.currentTimeMillis()
+        val msgId = UUID.randomUUID().toString()
+        val peerOnline = MeshStore.peers.value.any {
+            it.peerKeyHex.equals(normPeer, ignoreCase = true) && it.connected
+        }
+        val h = handleRef.get()
+
+        if (peerOnline && h != 0L && CypherBridge.isLoaded) {
+            val resp = synchronized(engineLock) {
+                CypherBridge.nativeSendPrivateMessage(h, normPeer, wirePayload, msgId)
+            }
+            MeshStore.recordTraffic(packets = 1, bytes = wirePayload.length.toLong())
+            processNativeResponse(resp)
+        } else if (MeshStore.storeAndForwardEnabled.value) {
+            MeshStore.enqueueOutboxMessage(
+                messageId = msgId,
+                recipientHex = normPeer,
+                payloadText = wirePayload,
+            )
+        }
+
+        val initialStatus = when {
+            peerOnline -> DeliveryStatus.DELIVERED
+            MeshStore.storeAndForwardEnabled.value -> DeliveryStatus.QUEUED
+            else -> DeliveryStatus.SENT
+        }
+
+        MeshStore.appendMessage(
             ChatMessage(
                 id = msgId,
-                conversationKey = normalizedChannel,
-                senderPeerHex = _myPeerIdHex.value,
-                senderNickname = _nickname.value,
-                text = clean,
-                timestampMs = System.currentTimeMillis(),
-                isOutgoing = true,
-                isPrivate = false,
-                delivery = DeliveryState.SENT,
-                replyTo = replyTo,
+                conversationKey = normPeer,
+                senderHex = MeshStore.localIdentityHex.value.ifEmpty { "self" },
+                senderLabel = MeshStore.nickname.value,
+                text = displayText,
+                timestampMs = now,
+                outgoing = true,
+                encrypted = true,
+                hops = 0,
+                delivery = initialStatus,
+                kind = kind,
+                attachmentPath = attachmentPath,
+                attachmentMeta = attachmentMeta,
+                replyToMessageId = replyToMessageId,
+                replyPreview = replyPreview,
             ),
-            activeConversationKey = _activeConversationKey.value,
         )
-        store.updateDraft(normalizedChannel, "")
+    }
 
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                val out = runCatching {
-                    CypherBridge.nativeSendPublicMessage(nodeHandle, wireText)
-                }.getOrNull()
-                emitEngineOutputLocked(out)
+    private fun flushOutboxForPeer(peerHex: String) {
+        val norm = peerHex.lowercase(Locale.US)
+        scope.launch {
+            val queued = MeshStore.drainPendingOutboxForPeer(norm)
+            if (queued.isEmpty()) return@launch
+            val h = handleRef.get()
+            for (item in queued) {
+                if (h != 0L && CypherBridge.isLoaded) {
+                    val resp = synchronized(engineLock) {
+                        CypherBridge.nativeSendPrivateMessage(h, norm, item.payloadText, item.messageId)
+                    }
+                    MeshStore.recordTraffic(packets = 1, bytes = item.payloadText.length.toLong())
+                    processNativeResponse(resp)
+                }
+                MeshStore.markMessageDelivered(item.messageId, DeliveryStatus.DELIVERED)
             }
         }
     }
 
-    fun sendBroadcastText(text: String, replyTo: ReplyReference? = null) {
-        sendChannelMessage(MeshStore.BROADCAST_CONVERSATION_KEY, text, replyTo)
-    }
-
-    fun sendPrivateMessage(recipientHex: String, text: String, replyTo: ReplyReference? = null) {
-        val clean = text.trim()
-        val peerKey = recipientHex.lowercase()
-        if (clean.isEmpty() || peerKey.isEmpty()) return
-        val wireText = encodeWireReply(clean, replyTo)
-        val msgId = UUID.randomUUID().toString().uppercase()
-
-        store.appendMessage(
-            ChatMessage(
-                id = msgId,
-                conversationKey = peerKey,
-                senderPeerHex = _myPeerIdHex.value,
-                senderNickname = _nickname.value,
-                text = clean,
-                timestampMs = System.currentTimeMillis(),
-                isOutgoing = true,
-                isPrivate = true,
-                delivery = DeliveryState.SENT,
-                replyTo = replyTo,
-            ),
-            activeConversationKey = _activeConversationKey.value,
-        )
-        store.updateDraft(peerKey, "")
-
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                val out = runCatching {
-                    CypherBridge.nativeSendPrivateMessage(nodeHandle, peerKey, wireText, msgId)
-                }.getOrNull()
-                emitEngineOutputLocked(out)
-                refreshStateFromEngineLocked()
+    fun sendVoiceNote(file: File, durationMs: Long) {
+        val durationSec = (durationMs / 1000L).coerceAtLeast(1L)
+        val activeConv = MeshStore.activeConversation.value
+        val now = System.currentTimeMillis()
+        val audioPayloadB64 = runCatching {
+            val bytes = file.readBytes()
+            if (bytes.size <= 24_576) {
+                Base64.encodeToString(bytes, Base64.NO_WRAP)
+            } else {
+                ""
             }
-        }
-    }
+        }.getOrDefault("")
 
-    /**
-     * Reads the device's current approximate location from Android's [LocationManager]
-     * (when permission is granted) and sends it as a formatted coordinates message over the mesh.
-     */
-    fun sendApproximateLocation(conversationKey: String) {
-        val coordsText = resolveDeviceApproxCoordinates()
-        val payload = "Location (approx.)\n$coordsText"
-        if (conversationKey.startsWith("#")) {
-            sendChannelMessage(conversationKey, payload)
+        val wireFrame = if (audioPayloadB64.isNotEmpty()) {
+            "[VOICE_NOTE:${durationSec}s:${file.name}:$audioPayloadB64]"
         } else {
-            sendPrivateMessage(conversationKey, payload)
+            "[VOICE_NOTE:${durationSec}s:${file.name}]"
         }
-    }
 
-    private fun resolveDeviceApproxCoordinates(): String {
-        val hasFine = ContextCompat.checkSelfPermission(
-            appContext,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED
-        val hasCoarse = ContextCompat.checkSelfPermission(
-            appContext,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (hasFine || hasCoarse) {
-            val lm = appContext.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-            val loc = runCatching {
-                lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                    ?: lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-                    ?: lm?.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
-            }.getOrNull()
-            if (loc != null) {
-                val latHem = if (loc.latitude >= 0) "N" else "S"
-                val lonHem = if (loc.longitude >= 0) "E" else "W"
-                return String.format(
-                    Locale.US,
-                    "%.4f° %s, %.4f° %s",
-                    kotlin.math.abs(loc.latitude),
-                    latHem,
-                    kotlin.math.abs(loc.longitude),
-                    lonHem,
-                )
-            }
-        }
-        return "30.3165° N, 78.0322° E"
-    }
-
-    fun sendMeshPing(peerHex: String): Boolean {
-        val cleanHex = peerHex.lowercase().trim()
-        if (cleanHex.isEmpty() || cleanHex.startsWith("#")) return false
-        val ok = synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                val out = runCatching { CypherBridge.nativeSendMeshPing(nodeHandle, cleanHex) }.getOrNull()
-                emitEngineOutputLocked(out)
-                out != null
+        if (activeConv.startsWith("#")) {
+            val h = handleRef.get()
+            val channelWire = if (activeConv == MeshStore.PUBLIC_CONVERSATION) {
+                wireFrame
             } else {
-                false
+                "[$activeConv] $wireFrame"
             }
+            if (h != 0L && CypherBridge.isLoaded) {
+                val resp = synchronized(engineLock) {
+                    CypherBridge.nativeSendPublicMessage(h, channelWire)
+                }
+                MeshStore.recordTraffic(packets = 1, bytes = file.length())
+                processNativeResponse(resp)
+            }
+            MeshStore.appendMessage(
+                ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    conversationKey = activeConv,
+                    senderHex = MeshStore.localIdentityHex.value.ifEmpty { "self" },
+                    senderLabel = MeshStore.nickname.value,
+                    text = "Voice message (${formatDuration(durationSec)})",
+                    timestampMs = now,
+                    outgoing = true,
+                    encrypted = MeshStore.isChannelPasswordProtected(activeConv),
+                    hops = 0,
+                    delivery = DeliveryStatus.SENT,
+                    kind = MessageKind.VOICE_NOTE,
+                    attachmentPath = file.absolutePath,
+                    attachmentMeta = "${durationSec}s",
+                ),
+            )
+        } else {
+            sendPrivateMessageInternal(
+                peerKeyHex = activeConv,
+                displayText = "Voice message (${formatDuration(durationSec)})",
+                wirePayload = wireFrame,
+                kind = MessageKind.VOICE_NOTE,
+                attachmentPath = file.absolutePath,
+                attachmentMeta = "${durationSec}s",
+            )
         }
-        val peerName = resolvePeerNickname(cleanHex)
-        appendSystemMessage(
-            conversationKey = cleanHex,
-            text = if (ok) {
-                "Sent encrypted mesh ping to $peerName (${PeerIdentity.shortId(cleanHex)})"
+    }
+
+    fun sendMediaAttachment(context: Context, uri: Uri, isImage: Boolean) {
+        val activeConv = MeshStore.activeConversation.value
+        val now = System.currentTimeMillis()
+        val (fileName, fileSize, localFile) = copyAttachmentToLocalCache(context, uri, isImage)
+        val kind = if (isImage) MessageKind.IMAGE else MessageKind.FILE
+        val sizeLabel = formatByteCount(fileSize)
+        val displayTitle = if (isImage) "Photo ($fileName)" else "File: $fileName ($sizeLabel)"
+        val wireHeader = if (isImage) "[IMAGE:$fileName:$sizeLabel]" else "[FILE:$fileName:$sizeLabel]"
+        val mimeType = if (isImage) "image/jpeg" else "application/octet-stream"
+
+        if (activeConv.startsWith("#")) {
+            val h = handleRef.get()
+            val payload = if (activeConv == MeshStore.PUBLIC_CONVERSATION) {
+                wireHeader
             } else {
-                "Queued mesh probe for $peerName (${PeerIdentity.shortId(cleanHex)})"
-            },
-        )
-        return ok
-    }
-
-    fun sendVoiceNoteFile(
-        recipientHex: String?,
-        audioFile: File,
-        durationMs: Long,
-    ): Boolean {
-        if (!audioFile.exists()) return false
-        val payload = runCatching { audioFile.readBytes() }.getOrNull() ?: return false
-        if (payload.isEmpty() || payload.size > MAX_ATTACHMENT_BYTES) return false
-
-        val normalizedRecipient = recipientHex
-            ?.takeIf { !it.startsWith("#") }
-            ?.lowercase()
-        val convKey = recipientHex ?: MeshStore.BROADCAST_CONVERSATION_KEY
-        val transferId = UUID.randomUUID().toString()
-
-        val savedAttachment = store.saveIncomingMedia(
-            messageId = transferId,
-            kind = AttachmentKind.AUDIO,
-            fileName = audioFile.name,
-            mimeType = "audio/mp4",
-            bytes = payload,
-        ).copy(durationMs = durationMs)
-
-        store.appendMessage(
-            ChatMessage(
-                id = transferId,
-                conversationKey = convKey,
-                senderPeerHex = _myPeerIdHex.value,
-                senderNickname = _nickname.value,
-                text = "Voice note (${formatDurationShort(durationMs)})",
-                timestampMs = System.currentTimeMillis(),
-                isOutgoing = true,
-                isPrivate = normalizedRecipient != null,
-                delivery = DeliveryState.SENT,
-                attachment = savedAttachment,
-            ),
-            activeConversationKey = _activeConversationKey.value,
-        )
-
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                val out = runCatching {
-                    if (normalizedRecipient == null) {
-                        CypherBridge.nativeSendFileBroadcast(nodeHandle, audioFile.name, "audio/mp4", payload)
-                    } else {
-                        CypherBridge.nativeSendFilePrivate(
-                            nodeHandle,
-                            normalizedRecipient,
-                            audioFile.name,
-                            "audio/mp4",
-                            payload,
-                            transferId,
-                        )
-                    }
-                }.getOrNull()
-                emitEngineOutputLocked(out)
+                "[$activeConv] $wireHeader"
             }
-        }
-        return true
-    }
-
-    fun sendMedia(
-        recipientHex: String?,
-        uri: Uri,
-        forcedKind: AttachmentKind? = null,
-    ): Boolean {
-        val resolver = appContext.contentResolver
-        val mime = resolver.getType(uri) ?: "application/octet-stream"
-        val fileName = queryFileName(uri) ?: "attachment_${System.currentTimeMillis()}"
-        val payload = runCatching {
-            resolver.openInputStream(uri)?.use { it.readBytes() }
-        }.getOrNull() ?: return false
-
-        if (payload.isEmpty() || payload.size > MAX_ATTACHMENT_BYTES) {
-            Log.w(TAG, "Attachment rejected: size=${payload.size} bytes")
-            return false
-        }
-
-        val kind = forcedKind ?: when {
-            mime.startsWith("image/") -> AttachmentKind.IMAGE
-            mime.startsWith("audio/") -> AttachmentKind.AUDIO
-            else -> AttachmentKind.FILE
-        }
-
-        val normalizedRecipient = recipientHex
-            ?.takeIf { !it.startsWith("#") }
-            ?.lowercase()
-        val convKey = recipientHex ?: MeshStore.BROADCAST_CONVERSATION_KEY
-        val transferId = UUID.randomUUID().toString()
-
-        val savedAttachment = store.saveIncomingMedia(transferId, kind, fileName, mime, payload)
-
-        store.appendMessage(
-            ChatMessage(
-                id = transferId,
-                conversationKey = convKey,
-                senderPeerHex = _myPeerIdHex.value,
-                senderNickname = _nickname.value,
-                text = fileName,
-                timestampMs = System.currentTimeMillis(),
-                isOutgoing = true,
-                isPrivate = normalizedRecipient != null,
-                delivery = DeliveryState.SENT,
-                attachment = savedAttachment,
-            ),
-            activeConversationKey = _activeConversationKey.value,
-        )
-
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                val out = runCatching {
-                    if (normalizedRecipient == null) {
-                        CypherBridge.nativeSendFileBroadcast(nodeHandle, fileName, mime, payload)
+            if (h != 0L && CypherBridge.isLoaded) {
+                val resp = synchronized(engineLock) {
+                    val bytes = localFile?.takeIf { it.length() <= 32_768L }?.readBytes()
+                    if (bytes != null && activeConv == MeshStore.PUBLIC_CONVERSATION) {
+                        CypherBridge.nativeSendFileBroadcast(h, fileName, mimeType, bytes)
                     } else {
-                        CypherBridge.nativeSendFilePrivate(
-                            nodeHandle,
-                            normalizedRecipient,
-                            fileName,
-                            mime,
-                            payload,
-                            transferId,
-                        )
+                        CypherBridge.nativeSendPublicMessage(h, payload)
                     }
-                }.getOrNull()
-                emitEngineOutputLocked(out)
+                }
+                MeshStore.recordTraffic(packets = 1, bytes = fileSize.coerceAtLeast(256L))
+                processNativeResponse(resp)
             }
+            MeshStore.appendMessage(
+                ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    conversationKey = activeConv,
+                    senderHex = MeshStore.localIdentityHex.value.ifEmpty { "self" },
+                    senderLabel = MeshStore.nickname.value,
+                    text = displayTitle,
+                    timestampMs = now,
+                    outgoing = true,
+                    encrypted = MeshStore.isChannelPasswordProtected(activeConv),
+                    hops = 0,
+                    delivery = DeliveryStatus.SENT,
+                    kind = kind,
+                    attachmentPath = localFile?.absolutePath ?: uri.toString(),
+                    attachmentMeta = "$fileName • $sizeLabel",
+                ),
+            )
+        } else {
+            val h = handleRef.get()
+            val bytes = localFile?.takeIf { it.length() <= 32_768L }?.readBytes()
+            if (h != 0L && CypherBridge.isLoaded && bytes != null) {
+                val transferId = UUID.randomUUID().toString()
+                val resp = synchronized(engineLock) {
+                    CypherBridge.nativeSendFilePrivate(h, activeConv.lowercase(Locale.US), fileName, mimeType, bytes, transferId)
+                }
+                processNativeResponse(resp)
+            }
+            sendPrivateMessageInternal(
+                peerKeyHex = activeConv,
+                displayText = displayTitle,
+                wirePayload = wireHeader,
+                kind = kind,
+                attachmentPath = localFile?.absolutePath ?: uri.toString(),
+                attachmentMeta = "$fileName • $sizeLabel",
+            )
         }
-        return true
     }
 
-    fun executeSlashCommand(
-        rawInput: String,
-        conversationKey: String,
-    ): SlashCommandOutcome {
-        val trimmed = rawInput.trim()
-        if (!trimmed.startsWith("/")) return SlashCommandOutcome.NotASlashCommand
+    fun sendApproximateLocation(context: Context? = appContext) {
+        val ctx = context ?: appContext
+        val activeConv = MeshStore.activeConversation.value
+        val now = System.currentTimeMillis()
 
-        val parts = trimmed.split(Regex("\\s+"), limit = 2)
-        val cmd = parts[0].lowercase()
-        val arg = parts.getOrNull(1)?.trim().orEmpty()
-        val isChannel = conversationKey.startsWith("#")
-        val defaultTargetName = if (!isChannel) resolvePeerNickname(conversationKey) else "everyone"
+        if (ctx == null || !LocationChannelResolver.hasLocationPermission(ctx)) {
+            appendSystemNotice(
+                activeConv,
+                "Location permission is required to share your coarse GPS coordinates.",
+            )
+            return
+        }
+
+        val snapshot = LocationChannelResolver.resolveBestLocation(ctx)
+        if (snapshot == null) {
+            appendSystemNotice(
+                activeConv,
+                "Waiting for a device GPS/Network location fix. Ensure Location Services are enabled.",
+            )
+            return
+        }
+
+        val coords = snapshot.formatCoordinates()
+        val geohash7 = snapshot.geohash(7)
+        val areaSuffix = if (snapshot.areaName.isNotBlank()) " • ${snapshot.areaName}" else ""
+        val display = "Location (approx.)\n$coords\n#$geohash7$areaSuffix"
+        val wire = "[LOCATION:$coords:#$geohash7]"
+
+        if (activeConv.startsWith("#")) {
+            val h = handleRef.get()
+            val payload = if (activeConv == MeshStore.PUBLIC_CONVERSATION) wire else "[$activeConv] $wire"
+            if (h != 0L && CypherBridge.isLoaded) {
+                val resp = synchronized(engineLock) {
+                    CypherBridge.nativeSendPublicMessage(h, payload)
+                }
+                MeshStore.recordTraffic(packets = 1, bytes = payload.length.toLong())
+                processNativeResponse(resp)
+            }
+            MeshStore.appendMessage(
+                ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    conversationKey = activeConv,
+                    senderHex = MeshStore.localIdentityHex.value.ifEmpty { "self" },
+                    senderLabel = MeshStore.nickname.value,
+                    text = display,
+                    timestampMs = now,
+                    outgoing = true,
+                    encrypted = MeshStore.isChannelPasswordProtected(activeConv),
+                    hops = 0,
+                    delivery = DeliveryStatus.SENT,
+                    kind = MessageKind.LOCATION,
+                    attachmentMeta = coords,
+                ),
+            )
+        } else {
+            sendPrivateMessageInternal(
+                peerKeyHex = activeConv,
+                displayText = display,
+                wirePayload = wire,
+                kind = MessageKind.LOCATION,
+                attachmentMeta = coords,
+            )
+        }
+    }
+
+    fun sendVerificationChallenge(peerKeyHex: String) {
+        val normPeer = peerKeyHex.lowercase(Locale.US)
+        val localFp = MeshStore.localFingerprintHex.value
+        if (normPeer.isBlank() || localFp.isBlank()) return
+        val nonce = VerificationService.generateNonceHex()
+        pendingChallenges[nonce] = normPeer
+        val frame = VerificationService.buildChallengeFrame(nonce, localFp)
+        val h = handleRef.get()
+        if (h != 0L && CypherBridge.isLoaded) {
+            val msgId = UUID.randomUUID().toString()
+            val resp = synchronized(engineLock) {
+                CypherBridge.nativeSendPrivateMessage(h, normPeer, frame, msgId)
+            }
+            processNativeResponse(resp)
+        }
+        appendSystemNotice(
+            MeshStore.activeConversation.value,
+            "Sent cryptographic verification challenge to ${MeshStore.resolvePeerNickname(normPeer)} (${normPeer.take(8)}…).",
+        )
+    }
+
+    private fun handleSlashCommand(raw: String): Boolean {
+        val parts = raw.trim().split(Regex("\\s+"))
+        val cmd = parts.firstOrNull()?.lowercase(Locale.US) ?: return false
+        val arg1 = parts.getOrNull(1)
+        val restAfterArg1 = parts.drop(2).joinToString(" ").trim()
+        val allArgs = parts.drop(1).joinToString(" ").trim()
+        val activeConv = MeshStore.activeConversation.value
 
         return when (cmd) {
-            "/hug" -> {
-                val target = arg.removePrefix("@").ifBlank { defaultTargetName }
-                val actionText = "* ${_nickname.value} gives @$target a warm encrypted mesh hug *"
-                if (isChannel) sendChannelMessage(conversationKey, actionText) else sendPrivateMessage(conversationKey, actionText)
-                SlashCommandOutcome.Handled()
+            "/j", "/join" -> {
+                if (arg1.isNullOrBlank()) {
+                    appendSystemNotice(activeConv, "Usage: /join #channel [password]")
+                } else {
+                    val password = restAfterArg1.takeIf { it.isNotBlank() }
+                    val tag = Geohash.normalizeTag(arg1)
+                    val ok = MeshStore.joinChannel(
+                        tag = tag,
+                        password = password,
+                        ownerPeerHex = MeshStore.localIdentityHex.value.takeIf { it.isNotBlank() },
+                    )
+                    if (ok) {
+                        val pwdNote = if (!password.isNullOrBlank()) " (AES-256-GCM password protected)" else ""
+                        appendSystemNotice(tag, "Joined channel $tag$pwdNote.")
+                    } else {
+                        appendSystemNotice(activeConv, "Cannot join $tag: password does not match channel commitment.")
+                    }
+                }
+                true
             }
-            "/slap" -> {
-                val target = arg.removePrefix("@").ifBlank { defaultTargetName }
-                val actionText = "* ${_nickname.value} slaps @$target around a bit with a large trout *"
-                if (isChannel) sendChannelMessage(conversationKey, actionText) else sendPrivateMessage(conversationKey, actionText)
-                SlashCommandOutcome.Handled()
+            "/leave" -> {
+                if (activeConv.startsWith("#") && activeConv != MeshStore.PUBLIC_CONVERSATION) {
+                    val leaving = activeConv
+                    MeshStore.leaveChannel(leaving)
+                    appendSystemNotice(MeshStore.PUBLIC_CONVERSATION, "Left channel $leaving.")
+                } else {
+                    appendSystemNotice(activeConv, "Cannot leave primary #mesh broadcast channel.")
+                }
+                true
             }
-            "/shrug" -> {
-                val body = if (arg.isBlank()) "¯\\_(ツ)_/¯" else "$arg ¯\\_(ツ)_/¯"
-                if (isChannel) sendChannelMessage(conversationKey, body) else sendPrivateMessage(conversationKey, body)
-                SlashCommandOutcome.Handled()
+            "/pass" -> {
+                if (!activeConv.startsWith("#") || activeConv == MeshStore.PUBLIC_CONVERSATION) {
+                    appendSystemNotice(activeConv, "/pass can only be used inside a custom #channel.")
+                    return true
+                }
+                val owner = MeshStore.channelOwners.value[activeConv]
+                val localId = MeshStore.localIdentityHex.value
+                if (!owner.isNullOrBlank() && localId.isNotBlank() && !owner.equals(localId, ignoreCase = true)) {
+                    appendSystemNotice(activeConv, "Only the channel creator (${owner.take(8)}…) can change the password.")
+                    return true
+                }
+                if (allArgs.isBlank()) {
+                    MeshStore.setChannelPassword(activeConv, null)
+                    appendSystemNotice(activeConv, "Cleared password protection on $activeConv.")
+                } else {
+                    MeshStore.setChannelPassword(activeConv, allArgs, localId)
+                    val commitment = MeshStore.channelCommitments.value[activeConv].orEmpty()
+                    val h = handleRef.get()
+                    if (h != 0L && CypherBridge.isLoaded && commitment.isNotBlank()) {
+                        val commitFrame = "[CHANNEL_COMMIT:$activeConv:$commitment:$localId]"
+                        val resp = synchronized(engineLock) {
+                            CypherBridge.nativeSendPublicMessage(h, commitFrame)
+                        }
+                        processNativeResponse(resp)
+                    }
+                    appendSystemNotice(activeConv, "Password updated for $activeConv (PBKDF2-HMAC-SHA256 + AES-256-GCM).")
+                }
+                true
+            }
+            "/transfer" -> {
+                if (!activeConv.startsWith("#") || activeConv == MeshStore.PUBLIC_CONVERSATION) {
+                    appendSystemNotice(activeConv, "/transfer can only be used inside a custom #channel.")
+                    return true
+                }
+                val targetPeer = resolveTargetPeerHex(arg1)
+                if (targetPeer == null) {
+                    appendSystemNotice(activeConv, "Peer not found. Usage: /transfer @nickname")
+                } else {
+                    MeshStore.transferChannelOwnership(activeConv, targetPeer)
+                    appendSystemNotice(
+                        activeConv,
+                        "Transferred ownership of $activeConv to ${MeshStore.resolvePeerNickname(targetPeer)} (${targetPeer.take(8)}…).",
+                    )
+                }
+                true
+            }
+            "/m", "/msg", "/dm" -> {
+                if (arg1.isNullOrBlank()) {
+                    appendSystemNotice(activeConv, "Usage: /msg @nickname [message]")
+                    return true
+                }
+                val targetPeer = resolveTargetPeerHex(arg1)
+                if (targetPeer == null) {
+                    appendSystemNotice(activeConv, "No mesh peer matching '$arg1' found.")
+                } else {
+                    MeshStore.selectConversation(targetPeer)
+                    if (restAfterArg1.isNotBlank()) {
+                        sendMessage(restAfterArg1)
+                    } else {
+                        appendSystemNotice(
+                            targetPeer,
+                            "Opened encrypted direct chat with ${MeshStore.resolvePeerNickname(targetPeer)}.",
+                        )
+                    }
+                }
+                true
+            }
+            "/w", "/who" -> {
+                val peers = MeshStore.peers.value
+                val summary = if (peers.isEmpty()) {
+                    "No peers currently in BLE range. Scanning and advertising are active."
+                } else {
+                    "Reachable mesh peers (${peers.size}):\n" + peers.joinToString("\n") { p ->
+                        val rssiText = p.rssi?.let { "$it dBm" } ?: "n/a"
+                        val encText = if (p.sessionEstablished) "Noise XX" else "Announced"
+                        "• @${p.nickname} (${p.peerKeyHex.take(8)}…) — ${p.hops} hop(s), $rssiText, $encText"
+                    }
+                }
+                appendSystemNotice(activeConv, summary)
+                true
+            }
+            "/channels" -> {
+                val joined = MeshStore.joinedChannels.value.sorted()
+                val bookmarked = MeshStore.bookmarkedChannels.value.sorted()
+                val text = buildString {
+                    append("Joined channels (${joined.size}): ${joined.joinToString(", ")}")
+                    if (bookmarked.isNotEmpty()) {
+                        append("\nBookmarked (${bookmarked.size}): ${bookmarked.joinToString(", ")}")
+                    }
+                }
+                appendSystemNotice(activeConv, text)
+                true
             }
             "/nick" -> {
-                if (arg.isBlank()) {
-                    appendSystemMessage(conversationKey, "Usage: /nick <new-nickname>")
+                val ctx = appContext
+                if (ctx != null && !allArgs.isBlank()) {
+                    updateNickname(ctx, allArgs)
+                    appendSystemNotice(activeConv, "Nickname updated to @${MeshStore.nickname.value}")
                 } else {
-                    updateNickname(arg)
-                    appendSystemMessage(conversationKey, "Nickname updated to @${_nickname.value}")
+                    appendSystemNotice(activeConv, "Usage: /nick <new_nickname>")
                 }
-                SlashCommandOutcome.Handled()
-            }
-            "/w" -> {
-                val online = _peers.value.filter { it.isDirectlyConnected }
-                val msg = if (online.isEmpty()) {
-                    "No other peers are directly connected right now."
-                } else {
-                    "Online mesh peers (${online.size}): ${online.joinToString(", ") { "@${it.nickname}" }}"
-                }
-                appendSystemMessage(conversationKey, msg)
-                SlashCommandOutcome.Handled()
-            }
-            "/ping" -> {
-                if (isChannel) {
-                    val ok = announceNow()
-                    appendSystemMessage(
-                        conversationKey,
-                        if (ok) "Broadcasted signed presence announce across $conversationKey." else "Mesh announce queued.",
-                    )
-                } else {
-                    sendMeshPing(conversationKey)
-                }
-                SlashCommandOutcome.Handled()
-            }
-            "/clear" -> {
-                store.clearConversationMessages(conversationKey)
-                SlashCommandOutcome.Handled("Cleared conversation history")
+                true
             }
             "/verify" -> {
-                val peerTarget = if (isChannel) null else conversationKey
-                SlashCommandOutcome.OpenVerificationSheet(peerTarget)
+                val targetPeer = if (!arg1.isNullOrBlank()) {
+                    resolveTargetPeerHex(arg1)
+                } else if (!activeConv.startsWith("#")) {
+                    activeConv
+                } else {
+                    null
+                }
+                if (targetPeer == null) {
+                    appendSystemNotice(activeConv, "Usage: /verify @nickname (or run inside a direct message thread)")
+                } else {
+                    sendVerificationChallenge(targetPeer)
+                }
+                true
+            }
+            "/route" -> {
+                val targetPeer = if (!arg1.isNullOrBlank()) {
+                    resolveTargetPeerHex(arg1)
+                } else if (!activeConv.startsWith("#")) {
+                    activeConv
+                } else {
+                    null
+                }
+                if (targetPeer == null) {
+                    appendSystemNotice(activeConv, "Usage: /route @nickname")
+                } else {
+                    val localId = MeshStore.localIdentityHex.value.ifBlank { "local" }
+                    val path = RoutePlanner.shortestPath(localId, targetPeer)
+                    if (path == null) {
+                        val peerObj = MeshStore.peers.value.firstOrNull { it.peerKeyHex.equals(targetPeer, ignoreCase = true) }
+                        if (peerObj != null) {
+                            appendSystemNotice(
+                                activeConv,
+                                "Direct/announced path to @${peerObj.nickname}: $localId → ${targetPeer.take(8)}… (${peerObj.hops} hop(s))",
+                            )
+                        } else {
+                            appendSystemNotice(activeConv, "No active mesh route to ${targetPeer.take(8)}…")
+                        }
+                    } else {
+                        val formatted = path.joinToString(" → ") { hop ->
+                            if (hop.equals(localId, ignoreCase = true)) {
+                                "you"
+                            } else {
+                                "@${MeshStore.resolvePeerNickname(hop)} (${hop.take(6)})"
+                            }
+                        }
+                        appendSystemNotice(activeConv, "Shortest mesh route (${path.size - 1} hop(s)): $formatted")
+                    }
+                }
+                true
+            }
+            "/fav" -> {
+                val targetPeer = if (!arg1.isNullOrBlank()) {
+                    resolveTargetPeerHex(arg1)
+                } else if (!activeConv.startsWith("#")) {
+                    activeConv
+                } else {
+                    null
+                }
+                if (targetPeer == null) {
+                    appendSystemNotice(activeConv, "Usage: /fav @nickname")
+                } else {
+                    MeshStore.toggleFavoritePeer(targetPeer)
+                    val isFav = targetPeer.lowercase(Locale.US) in MeshStore.favoritePeers.value
+                    val h = handleRef.get()
+                    if (h != 0L && CypherBridge.isLoaded) {
+                        synchronized(engineLock) {
+                            CypherBridge.nativeSetPeerFavorite(h, targetPeer.lowercase(Locale.US), isFav)
+                        }
+                    }
+                    appendSystemNotice(
+                        activeConv,
+                        if (isFav) {
+                            "Added @${MeshStore.resolvePeerNickname(targetPeer)} to favorites."
+                        } else {
+                            "Removed @${MeshStore.resolvePeerNickname(targetPeer)} from favorites."
+                        },
+                    )
+                }
+                true
             }
             "/block" -> {
-                val peerHex = resolvePeerHexFromArg(arg, conversationKey)
-                if (peerHex == null) {
-                    appendSystemMessage(conversationKey, "Specify a peer to block or run /block inside a DM.")
-                } else if (!store.isBlocked(peerHex)) {
-                    toggleBlocked(peerHex)
+                if (arg1.isNullOrBlank()) {
+                    val blocked = MeshStore.blockedPeers.value
+                    if (blocked.isEmpty()) {
+                        appendSystemNotice(activeConv, "No blocked peers. Usage: /block @nickname")
+                    } else {
+                        appendSystemNotice(
+                            activeConv,
+                            "Blocked peers (${blocked.size}): " + blocked.joinToString(", ") {
+                                "@${MeshStore.resolvePeerNickname(it)} (${it.take(8)})"
+                            },
+                        )
+                    }
                 } else {
-                    appendSystemMessage(conversationKey, "Peer is already blocked.")
+                    val targetPeer = resolveTargetPeerHex(arg1) ?: arg1.removePrefix("@").lowercase(Locale.US)
+                    if (targetPeer !in MeshStore.blockedPeers.value) {
+                        MeshStore.toggleBlockPeer(targetPeer)
+                    }
+                    val h = handleRef.get()
+                    if (h != 0L && CypherBridge.isLoaded) {
+                        synchronized(engineLock) {
+                            CypherBridge.nativeBlockPeer(h, targetPeer)
+                        }
+                    }
+                    appendSystemNotice(activeConv, "Blocked peer @${MeshStore.resolvePeerNickname(targetPeer)}.")
                 }
-                SlashCommandOutcome.Handled()
+                true
             }
             "/unblock" -> {
-                val peerHex = resolvePeerHexFromArg(arg, conversationKey)
-                if (peerHex == null) {
-                    appendSystemMessage(conversationKey, "Specify a peer to unblock or run /unblock inside a DM.")
-                } else if (store.isBlocked(peerHex)) {
-                    toggleBlocked(peerHex)
+                if (arg1.isNullOrBlank()) {
+                    appendSystemNotice(activeConv, "Usage: /unblock @nickname")
                 } else {
-                    appendSystemMessage(conversationKey, "Peer is not blocked.")
+                    val targetPeer = resolveTargetPeerHex(arg1) ?: arg1.removePrefix("@").lowercase(Locale.US)
+                    if (targetPeer in MeshStore.blockedPeers.value) {
+                        MeshStore.toggleBlockPeer(targetPeer)
+                        val h = handleRef.get()
+                        if (h != 0L && CypherBridge.isLoaded) {
+                            synchronized(engineLock) {
+                                CypherBridge.nativeUnblockPeer(h, targetPeer)
+                            }
+                        }
+                        appendSystemNotice(activeConv, "Unblocked peer @${MeshStore.resolvePeerNickname(targetPeer)}.")
+                    } else {
+                        appendSystemNotice(activeConv, "Peer '$arg1' is not blocked.")
+                    }
                 }
-                SlashCommandOutcome.Handled()
+                true
             }
-            else -> SlashCommandOutcome.NotASlashCommand
+            "/hug" -> {
+                val target = allArgs.removePrefix("@").ifBlank { "everyone" }
+                sendMessage("* @${MeshStore.nickname.value} gives @$target a warm mesh hug 🤗 *")
+                true
+            }
+            "/slap" -> {
+                val target = allArgs.removePrefix("@").ifBlank { "everyone" }
+                sendMessage("* @${MeshStore.nickname.value} slaps @$target around a bit with a large trout 🐟 *")
+                true
+            }
+            "/shrug" -> {
+                val msg = if (allArgs.isBlank()) "¯\\_(ツ)_/¯" else "$allArgs ¯\\_(ツ)_/¯"
+                sendMessage(msg)
+                true
+            }
+            "/clear" -> {
+                MeshStore.clearConversation(activeConv)
+                true
+            }
+            "/ping" -> {
+                pingAll()
+                appendSystemNotice(activeConv, "Broadcasted BLE mesh ping frame.")
+                true
+            }
+            "/announce" -> {
+                announceNow()
+                appendSystemNotice(activeConv, "Broadcasted local identity presence announcement.")
+                true
+            }
+            "/help" -> {
+                val helpLines = SLASH_COMMANDS.joinToString("\n") { spec ->
+                    "• ${spec.syntax} — ${spec.description}"
+                }
+                appendSystemNotice(activeConv, "Available Commands:\n$helpLines")
+                true
+            }
+            else -> false
         }
     }
 
-    private fun resolvePeerHexFromArg(arg: String, currentConversationKey: String): String? {
-        if (arg.isBlank()) {
-            return currentConversationKey.takeIf { !it.startsWith("#") }
+    private fun resolveTargetPeerHex(token: String?): String? {
+        if (token.isNullOrBlank()) return null
+        val cleaned = token.trim().removePrefix("@").lowercase(Locale.US)
+        MeshStore.peers.value.firstOrNull {
+            it.peerKeyHex.equals(cleaned, ignoreCase = true) ||
+                it.peerKeyHex.startsWith(cleaned, ignoreCase = true) ||
+                it.nickname.equals(cleaned, ignoreCase = true)
+        }?.let { return it.peerKeyHex.lowercase(Locale.US) }
+
+        MeshStore.knownPeers.value.values.firstOrNull {
+            it.peerKeyHex.equals(cleaned, ignoreCase = true) ||
+                it.peerKeyHex.startsWith(cleaned, ignoreCase = true) ||
+                it.nickname.equals(cleaned, ignoreCase = true) ||
+                it.customAlias.equals(cleaned, ignoreCase = true)
+        }?.let { return it.peerKeyHex.lowercase(Locale.US) }
+
+        if (cleaned.length >= 8 && cleaned.all { it in '0'..'9' || it in 'a'..'f' }) {
+            return cleaned
         }
-        val clean = arg.removePrefix("@").lowercase()
-        val matchByPeer = _peers.value.firstOrNull {
-            it.peerIdHex.equals(clean, ignoreCase = true) ||
-                it.nickname.equals(clean, ignoreCase = true) ||
-                PeerIdentity.formatHandle(it.nickname, it.peerIdHex).removePrefix("@").equals(clean, ignoreCase = true)
-        }
-        if (matchByPeer != null) return matchByPeer.peerIdHex
-        val matchByKnown = store.knownPeerNames.value.entries.firstOrNull { (hex, name) ->
-            hex.equals(clean, ignoreCase = true) || name.equals(clean, ignoreCase = true)
-        }
-        return matchByKnown?.key
+        return null
     }
 
-    fun resolvePeerNickname(peerHex: String): String {
-        val key = peerHex.lowercase()
-        return _peers.value.firstOrNull { it.peerIdHex == key }?.nickname
-            ?: store.knownPeerNames.value[key]
-            ?: "anon#${key.takeLast(3)}"
+    private fun appendSystemNotice(conversationKey: String, notice: String) {
+        MeshStore.appendMessage(
+            ChatMessage(
+                id = UUID.randomUUID().toString(),
+                conversationKey = conversationKey,
+                senderHex = "system",
+                senderLabel = "system",
+                text = notice,
+                timestampMs = System.currentTimeMillis(),
+                outgoing = true,
+                encrypted = false,
+                hops = 0,
+                delivery = DeliveryStatus.SENT,
+                kind = MessageKind.SYSTEM,
+            ),
+        )
+    }
+
+    fun pingAll() {
+        val h = handleRef.get()
+        if (h == 0L || !CypherBridge.isLoaded) return
+        val peers = MeshStore.peers.value
+        if (peers.isEmpty()) {
+            announceNow()
+            return
+        }
+        peers.forEach { p ->
+            val resp = synchronized(engineLock) {
+                CypherBridge.nativeSendMeshPing(h, p.peerKeyHex)
+            }
+            MeshStore.recordTraffic(packets = 1, bytes = 64L)
+            processNativeResponse(resp)
+        }
+    }
+
+    fun announceNow() {
+        val h = handleRef.get()
+        if (h == 0L || !CypherBridge.isLoaded) return
+        val resp = synchronized(engineLock) {
+            CypherBridge.nativeAnnounce(h)
+        }
+        MeshStore.recordTraffic(packets = 1, bytes = 96L)
+        processNativeResponse(resp)
+    }
+
+    private fun refreshEngineState() {
+        val h = handleRef.get()
+        if (h == 0L || !CypherBridge.isLoaded) return
+        val jsonBytes = synchronized(engineLock) {
+            CypherBridge.nativeStateJson(h)
+        } ?: return
+        val jsonStr = jsonBytes.toString(Charsets.UTF_8)
+        runCatching {
+            val root = JSONObject(jsonStr)
+            val idHex = root.optString("identity_hex", root.optString("my_peer_id", ""))
+            val fpHex = root.optString("fingerprint_hex", root.optString("my_fingerprint", ""))
+            if (idHex.isNotEmpty()) {
+                MeshStore.setLocalIdentity(idHex, fpHex)
+            }
+            val peersArr = root.optJSONArray("peers") ?: JSONArray()
+            val list = ArrayList<PeerEntry>(peersArr.length())
+            for (i in 0 until peersArr.length()) {
+                val p = peersArr.getJSONObject(i)
+                val peerKey = p.optString("peer_key", p.optString("id", "")).lowercase(Locale.US)
+                if (peerKey.isBlank()) continue
+                val nick = p.optString("nickname", "").ifEmpty { "anon#${peerKey.take(6)}" }
+                val peerFp = p.optString("fingerprint_hex", p.optString("fingerprint", ""))
+                val routeArr = p.optJSONArray("route_path")
+                val routeList = if (routeArr != null) {
+                    List(routeArr.length()) { idx -> routeArr.optString(idx, "") }.filter { it.isNotBlank() }
+                } else {
+                    emptyList()
+                }
+                val entry = PeerEntry(
+                    peerKeyHex = peerKey,
+                    nickname = nick,
+                    connected = p.optBoolean("connected", p.optBoolean("is_connected", false)),
+                    sessionEstablished = p.optBoolean("session_established", p.optBoolean("has_noise_session", false)),
+                    rssi = if (p.isNull("rssi")) null else p.optInt("rssi"),
+                    hops = p.optInt("hops", 1).coerceIn(1, 7),
+                    fingerprintHex = peerFp,
+                    routePath = routeList,
+                )
+                list.add(entry)
+                if (entry.connected) {
+                    flushOutboxForPeer(entry.peerKeyHex)
+                }
+            }
+            MeshStore.updatePeers(list)
+        }.onFailure { e ->
+            Log.w(TAG, "Failed parsing engine state json", e)
+        }
+    }
+
+    private fun processNativeResponse(blob: ByteArray?) {
+        if (blob == null || blob.isEmpty()) return
+        val parsed = CypherBridge.parseResponse(blob)
+        if (parsed.commands.isNotEmpty()) {
+            MeshStore.recordTraffic(
+                packets = parsed.commands.size,
+                bytes = parsed.commands.sumOf { it.size }.toLong(),
+            )
+            bleLayer?.executeCommands(parsed.commands)
+        }
+        if (parsed.eventsJson != "[]" && parsed.eventsJson.isNotBlank()) {
+            parseEngineEvents(parsed.eventsJson)
+        }
+    }
+
+    private fun parseEngineEvents(eventsJson: String) {
+        runCatching {
+            val arr = JSONArray(eventsJson)
+            for (i in 0 until arr.length()) {
+                val item = arr.getJSONObject(i)
+                when {
+                    item.has("PublicMessageReceived") -> {
+                        val ev = item.getJSONObject("PublicMessageReceived")
+                        val sender = ev.optString("sender", "").lowercase(Locale.US)
+                        val nick = ev.optString("sender_nickname", "").ifEmpty {
+                            MeshStore.resolvePeerNickname(sender)
+                        }
+                        val rawText = ev.optString("text", "")
+                        val ts = ev.optLong("timestamp_ms", System.currentTimeMillis())
+                        val hops = ev.optInt("hops", 1).coerceIn(1, 7)
+
+                        if (rawText.startsWith("[CHANNEL_COMMIT:")) {
+                            handleChannelCommitmentFrame(rawText)
+                            continue
+                        }
+
+                        val (convKey, bodyText) = extractChannelPrefix(rawText)
+                        val password = MeshStore.getChannelPassword(convKey)
+                        val decryptedBody = if (!password.isNullOrBlank() && bodyText.startsWith(ChannelCrypto.ENCRYPTED_PREFIX)) {
+                            ChannelCrypto.decryptChannelPayload(convKey, password, bodyText)
+                                ?: "🔒 Encrypted channel message (set password with /pass <password>)"
+                        } else if (bodyText.startsWith(ChannelCrypto.ENCRYPTED_PREFIX)) {
+                            "🔒 Encrypted channel message (set password with /pass <password>)"
+                        } else {
+                            bodyText
+                        }
+
+                        val (kind, displayBody, meta, savedPath) = parseWireAttachment(decryptedBody)
+                        val msg = ChatMessage(
+                            id = "$sender-$ts-${rawText.hashCode()}",
+                            conversationKey = convKey,
+                            senderHex = sender,
+                            senderLabel = nick,
+                            text = displayBody,
+                            timestampMs = ts,
+                            outgoing = false,
+                            encrypted = bodyText.startsWith(ChannelCrypto.ENCRYPTED_PREFIX),
+                            hops = hops,
+                            kind = kind,
+                            attachmentPath = savedPath,
+                            attachmentMeta = meta,
+                        )
+                        MeshStore.appendMessage(msg)
+                        maybePostIncomingNotification(msg)
+                    }
+                    item.has("PrivateMessageReceived") -> {
+                        val ev = item.getJSONObject("PrivateMessageReceived")
+                        val sender = ev.optString("sender", "").lowercase(Locale.US)
+                        val rawText = ev.optString("text", "")
+                        val ts = ev.optLong("timestamp_ms", System.currentTimeMillis())
+
+                        if (rawText.startsWith("[VERIFY_CHALLENGE:")) {
+                            handleIncomingVerifyChallenge(sender, rawText)
+                            continue
+                        }
+                        if (rawText.startsWith("[VERIFY_RESPONSE:")) {
+                            handleIncomingVerifyResponse(sender, rawText)
+                            continue
+                        }
+
+                        val senderNick = MeshStore.resolvePeerNickname(sender)
+                        val (kind, displayBody, meta, savedPath) = parseWireAttachment(rawText)
+                        val msg = ChatMessage(
+                            id = "$sender-$ts-${rawText.hashCode()}",
+                            conversationKey = sender,
+                            senderHex = sender,
+                            senderLabel = senderNick,
+                            text = displayBody,
+                            timestampMs = ts,
+                            outgoing = false,
+                            encrypted = true,
+                            hops = 1,
+                            kind = kind,
+                            attachmentPath = savedPath,
+                            attachmentMeta = meta,
+                        )
+                        MeshStore.appendMessage(msg)
+                        maybePostIncomingNotification(msg)
+                    }
+                    item.has("SessionEstablished") -> {
+                        val ev = item.getJSONObject("SessionEstablished")
+                        val peerHex = ev.optString("peer", "").lowercase(Locale.US)
+                        if (peerHex.isNotBlank()) {
+                            flushOutboxForPeer(peerHex)
+                        }
+                    }
+                    item.has("PeerUpdated") -> {
+                        val ev = item.getJSONObject("PeerUpdated")
+                        val peerHex = ev.optString("peer", "").lowercase(Locale.US)
+                        val nick = ev.optString("nickname", "").takeIf { it.isNotBlank() }
+                        val hops = ev.optInt("hops", 1).coerceIn(1, 7)
+                        val rssi = if (ev.isNull("rssi")) null else ev.optInt("rssi")
+                        val neighborsArr = ev.optJSONArray("neighbors")
+                        val neighbors = if (neighborsArr != null) {
+                            List(neighborsArr.length()) { idx -> neighborsArr.optString(idx, "") }
+                                .filter { it.isNotBlank() }
+                        } else {
+                            null
+                        }
+                        if (peerHex.isNotBlank()) {
+                            MeshGraphService.updateFromAnnouncement(
+                                originID = peerHex,
+                                originNickname = nick,
+                                neighbors = neighbors,
+                                timestamp = System.currentTimeMillis().toULong(),
+                                hops = hops,
+                                rssi = rssi,
+                            )
+                        }
+                    }
+                }
+            }
+        }.onFailure { e ->
+            Log.w(TAG, "Failed parsing engine events", e)
+        }
+    }
+
+    private fun handleChannelCommitmentFrame(rawText: String) {
+        val inner = rawText.removePrefix("[CHANNEL_COMMIT:").removeSuffix("]")
+        val parts = inner.split(":")
+        if (parts.size >= 2) {
+            val tag = Geohash.normalizeTag(parts[0])
+            val commitmentHex = parts[1]
+            val ownerHex = parts.getOrNull(2)
+            MeshStore.registerChannelCommitment(tag, commitmentHex, ownerHex)
+        }
+    }
+
+    private fun handleIncomingVerifyChallenge(senderHex: String, rawText: String) {
+        val inner = rawText.removePrefix("[VERIFY_CHALLENGE:").removeSuffix("]")
+        val parts = inner.split(":")
+        val nonce = parts.getOrNull(0).orEmpty()
+        val challengerFp = parts.getOrNull(1).orEmpty()
+        val localFp = MeshStore.localFingerprintHex.value
+        if (nonce.isBlank() || challengerFp.isBlank() || localFp.isBlank()) return
+
+        val responseFrame = VerificationService.buildResponseFrame(
+            nonceHex = nonce,
+            responderFingerprintHex = localFp,
+            challengerFingerprintHex = challengerFp,
+        )
+        val h = handleRef.get()
+        if (h != 0L && CypherBridge.isLoaded) {
+            val msgId = UUID.randomUUID().toString()
+            val resp = synchronized(engineLock) {
+                CypherBridge.nativeSendPrivateMessage(h, senderHex, responseFrame, msgId)
+            }
+            processNativeResponse(resp)
+        }
+    }
+
+    private fun handleIncomingVerifyResponse(senderHex: String, rawText: String) {
+        val inner = rawText.removePrefix("[VERIFY_RESPONSE:").removeSuffix("]")
+        val parts = inner.split(":")
+        val nonce = parts.getOrNull(0).orEmpty()
+        val responderFp = parts.getOrNull(1).orEmpty()
+        val digest = parts.getOrNull(2).orEmpty()
+        val expectedPeer = pendingChallenges.remove(nonce) ?: return
+        if (!expectedPeer.equals(senderHex, ignoreCase = true)) return
+
+        val localFp = MeshStore.localFingerprintHex.value
+        val expectedDigest = VerificationService.computeChallengeDigestHex(
+            nonceHex = nonce,
+            responderFingerprintHex = responderFp,
+            challengerFingerprintHex = localFp,
+        )
+        if (expectedDigest.equals(digest, ignoreCase = true)) {
+            MeshStore.markPeerVerified(
+                peerHex = senderHex,
+                fingerprintHex = responderFp,
+                nickname = MeshStore.resolvePeerNickname(senderHex),
+            )
+            val h = handleRef.get()
+            if (h != 0L && CypherBridge.isLoaded) {
+                synchronized(engineLock) {
+                    CypherBridge.nativeSetPeerVerified(h, senderHex, true)
+                }
+            }
+            appendSystemNotice(
+                senderHex,
+                "Cryptographic challenge-response verified for @${MeshStore.resolvePeerNickname(senderHex)}.",
+            )
+        }
+    }
+
+    private data class ParsedWireAttachment(
+        val kind: MessageKind,
+        val displayBody: String,
+        val meta: String?,
+        val savedPath: String?,
+    )
+
+    private fun parseWireAttachment(bodyText: String): ParsedWireAttachment {
+        return when {
+            bodyText.startsWith("[VOICE_NOTE:") && bodyText.endsWith("]") -> {
+                val inner = bodyText.removePrefix("[VOICE_NOTE:").removeSuffix("]")
+                val parts = inner.split(":", limit = 3)
+                val dur = parts.firstOrNull() ?: "1s"
+                val fileName = parts.getOrNull(1) ?: "voice_${System.currentTimeMillis()}.m4a"
+                val audioB64 = parts.getOrNull(2).orEmpty()
+                val savedFile = if (audioB64.isNotBlank() && appContext != null) {
+                    runCatching {
+                        val dir = File(appContext!!.cacheDir, "voice_notes").apply { mkdirs() }
+                        val outFile = File(dir, fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_"))
+                        outFile.writeBytes(Base64.decode(audioB64, Base64.NO_WRAP))
+                        outFile.absolutePath
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                ParsedWireAttachment(MessageKind.VOICE_NOTE, "Voice message ($dur)", dur, savedFile)
+            }
+            bodyText.startsWith("[IMAGE:") && bodyText.endsWith("]") -> {
+                val inner = bodyText.removePrefix("[IMAGE:").removeSuffix("]")
+                val parts = inner.split(":")
+                val name = parts.getOrNull(0) ?: "photo.jpg"
+                val size = parts.getOrNull(1) ?: ""
+                ParsedWireAttachment(MessageKind.IMAGE, "Photo ($name)", "$name • $size", null)
+            }
+            bodyText.startsWith("[FILE:") && bodyText.endsWith("]") -> {
+                val inner = bodyText.removePrefix("[FILE:").removeSuffix("]")
+                val parts = inner.split(":")
+                val name = parts.getOrNull(0) ?: "document.bin"
+                val size = parts.getOrNull(1) ?: ""
+                ParsedWireAttachment(MessageKind.FILE, "File: $name ($size)", "$name • $size", null)
+            }
+            bodyText.startsWith("[LOCATION:") && bodyText.endsWith("]") -> {
+                val inner = bodyText.removePrefix("[LOCATION:").removeSuffix("]")
+                val parts = inner.split(":")
+                val coords = parts.getOrNull(0) ?: inner
+                val geohash = parts.getOrNull(1).orEmpty()
+                val text = if (geohash.isNotBlank()) {
+                    "Location (approx.)\n$coords\n$geohash"
+                } else {
+                    "Location (approx.)\n$coords"
+                }
+                ParsedWireAttachment(MessageKind.LOCATION, text, coords, null)
+            }
+            else -> ParsedWireAttachment(MessageKind.TEXT, bodyText, null, null)
+        }
+    }
+
+    private fun extractChannelPrefix(rawText: String): Pair<String, String> {
+        if (rawText.startsWith("[#")) {
+            val closeIdx = rawText.indexOf(']')
+            if (closeIdx in 2..25) {
+                val tag = Geohash.normalizeTag(rawText.substring(1, closeIdx))
+                val rest = rawText.substring(closeIdx + 1).trimStart()
+                MeshStore.joinChannel(tag)
+                return tag to rest
+            }
+        }
+        return MeshStore.PUBLIC_CONVERSATION to rawText
+    }
+
+    private fun copyAttachmentToLocalCache(
+        context: Context,
+        uri: Uri,
+        isImage: Boolean,
+    ): Triple<String, Long, File?> {
+        var name = if (isImage) "image_${System.currentTimeMillis()}.jpg" else "file_${System.currentTimeMillis()}.bin"
+        var size = 0L
+        runCatching {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (cursor.moveToFirst()) {
+                    if (nameIdx >= 0) {
+                        cursor.getString(nameIdx)?.takeIf { it.isNotBlank() }?.let { name = it }
+                    }
+                    if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) {
+                        size = cursor.getLong(sizeIdx)
+                    }
+                }
+            }
+        }
+        val copied = runCatching {
+            val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
+            val safeName = "${System.currentTimeMillis()}_${name.replace(Regex("[^a-zA-Z0-9._-]"), "_")}"
+            val dest = File(dir, safeName)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                dest.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            if (size <= 0L) size = dest.length()
+            dest
+        }.getOrNull()
+        return Triple(name, size.coerceAtLeast(1024L), copied)
+    }
+
+    private fun formatByteCount(bytes: Long): String {
+        return when {
+            bytes >= 1_048_576L -> String.format(Locale.US, "%.1f MB", bytes / 1_048_576.0)
+            bytes >= 1_024L -> String.format(Locale.US, "%.1f KB", bytes / 1_024.0)
+            else -> "$bytes B"
+        }
+    }
+
+    private fun formatDuration(seconds: Long): String {
+        val m = seconds / 60
+        val s = seconds % 60
+        return "%d:%02d".format(m, s)
+    }
+
+    private fun maybePostIncomingNotification(message: ChatMessage) {
+        val ctx = appContext ?: return
+        if (!MeshStore.notificationsEnabled.value) return
+        if (message.conversationKey in MeshStore.mutedConversations.value) return
+        val localNick = MeshStore.nickname.value
+        val isMention = localNick.isNotBlank() && message.text.contains("@$localNick", ignoreCase = true)
+        if (isMention && !MeshStore.mentionAlertsEnabled.value) return
+
+        runCatching {
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val chan = NotificationChannel(
+                    MSG_NOTIFICATION_CHANNEL,
+                    "Cipher Mesh Messages",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    description = "Offline encrypted mesh message alerts"
+                    enableVibration(MeshStore.soundVibrationEnabled.value)
+                }
+                nm.createNotificationChannel(chan)
+            }
+            val tapIntent = Intent(ctx, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pending = PendingIntent.getActivity(
+                ctx,
+                message.conversationKey.hashCode(),
+                tapIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val title = when {
+                message.conversationKey == MeshStore.PUBLIC_CONVERSATION -> "Mesh Group • @${message.senderLabel}"
+                message.conversationKey.startsWith("#") -> "${message.conversationKey} • @${message.senderLabel}"
+                else -> "@${message.senderLabel}"
+            }
+            val notif = NotificationCompat.Builder(ctx, MSG_NOTIFICATION_CHANNEL)
+                .setSmallIcon(R.drawable.ic_stat_cypher)
+                .setContentTitle(title)
+                .setContentText(message.text)
+                .setAutoCancel(true)
+                .setContentIntent(pending)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build()
+            nm.notify(message.id.hashCode(), notif)
+        }
+    }
+
+    fun exportConversationTranscript(conversationKey: String): String {
+        val messages = MeshStore.conversations.value[conversationKey].orEmpty()
+        val header = buildString {
+            appendLine("=== Cipher Offline Mesh Transcript ===")
+            appendLine("Conversation: ${resolveConversationTitle(conversationKey)}")
+            appendLine("Exported at: ${java.util.Date()}")
+            appendLine("Messages: ${messages.size}")
+            appendLine("======================================")
+        }
+        if (messages.isEmpty()) return "$header\n(No messages)"
+        val body = messages.joinToString("\n") { msg ->
+            val time = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+                .format(java.util.Date(msg.timestampMs))
+            val lock = if (msg.encrypted) "[E2EE]" else "[MESH]"
+            "[$time] $lock ${msg.senderLabel}: ${msg.text}"
+        }
+        return "$header\n$body"
     }
 
     fun resolveConversationTitle(conversationKey: String): String {
-        return when (conversationKey.lowercase()) {
-            "#mesh" -> "Mesh Group"
-            "#cipher-dev" -> "Cipher Dev"
-            "#nearby-chat" -> "Nearby Chat"
-            "#field-team" -> "Field Team"
-            "#city-3" -> "City #3"
-            "#mesh-2" -> "Mesh #2"
-            "#block-10" -> "Block #10"
-            "#neighborhood-0" -> "Neighborhood #0"
-            else -> if (conversationKey.startsWith("#")) {
-                conversationKey
-            } else {
-                resolvePeerNickname(conversationKey)
-            }
-        }
-    }
-
-    fun toggleReaction(conversationKey: String, messageId: String, emoji: String) {
-        store.toggleMessageReaction(conversationKey, messageId, emoji)
-    }
-
-    fun toggleFavorite(peerHex: String) {
-        val clean = peerHex.lowercase()
-        store.toggleFavorite(clean)
-        val isNowFav = store.favorites.value.contains(clean)
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                runCatching { CypherBridge.nativeSetPeerFavorite(nodeHandle, clean, isNowFav) }
-            }
-            refreshStateFromEngineLocked()
-        }
-    }
-
-    fun markPeerVerified(peerHex: String) {
-        val clean = peerHex.lowercase()
-        val peer = _peers.value.firstOrNull { it.peerIdHex.equals(clean, ignoreCase = true) }
-        val fp = peer?.fingerprintHex?.ifBlank {
-            if (clean == MeshStore.RICK_PEER_KEY) MeshStore.RICK_FINGERPRINT_HEX else PeerIdentity.fingerprintHex(clean)
-        } ?: if (clean == MeshStore.RICK_PEER_KEY) MeshStore.RICK_FINGERPRINT_HEX else PeerIdentity.fingerprintHex(clean)
-
-        store.markPeerVerified(clean, fp)
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                runCatching { CypherBridge.nativeSetPeerVerified(nodeHandle, clean, true) }
-            }
-            refreshStateFromEngineLocked()
-        }
-        appendSystemMessage(
-            conversationKey = clean,
-            text = "Marked safety number as verified (${fp.take(12).uppercase()}…)",
-        )
-    }
-
-    fun unverifyPeer(peerHex: String) {
-        val clean = peerHex.lowercase()
-        store.unverifyPeer(clean)
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                runCatching { CypherBridge.nativeSetPeerVerified(nodeHandle, clean, false) }
-            }
-            refreshStateFromEngineLocked()
-        }
-        appendSystemMessage(
-            conversationKey = clean,
-            text = "Cleared verified status for this peer",
-        )
-    }
-
-    fun toggleBlocked(peerHex: String) {
-        val clean = peerHex.lowercase()
-        val nowBlocked = store.toggleBlocked(clean)
-        synchronized(coreLock) {
-            if (nodeHandle != 0L) {
-                runCatching {
-                    if (nowBlocked) {
-                        CypherBridge.nativeBlockPeer(nodeHandle, clean)
-                    } else {
-                        CypherBridge.nativeUnblockPeer(nodeHandle, clean)
-                    }
+        if (conversationKey == MeshStore.PUBLIC_CONVERSATION) return "Mesh Group"
+        if (conversationKey.startsWith("#")) {
+            val raw = conversationKey.removePrefix("#")
+            if (Geohash.isValid(raw)) {
+                val level = GeohashChannelLevel.entries.firstOrNull { it.precision == raw.length }
+                return if (level != null) {
+                    "${level.displayName} #$raw"
+                } else {
+                    "#$raw"
                 }
             }
-            refreshStateFromEngineLocked()
+            return conversationKey
         }
-        appendSystemMessage(
-            conversationKey = clean,
-            text = if (nowBlocked) "Peer blocked — incoming traffic muted" else "Peer unblocked",
-        )
-    }
-
-    fun togglePinConversation(conversationKey: String): Boolean =
-        store.togglePinConversation(conversationKey)
-
-    fun toggleMuteConversation(conversationKey: String): Boolean =
-        store.toggleMuteConversation(conversationKey)
-
-    fun toggleMarkUnread(conversationKey: String): Boolean =
-        store.toggleMarkUnread(conversationKey)
-
-    fun deleteConversationWithBackup(conversationKey: String): ConversationBackup? =
-        store.deleteConversationWithBackup(conversationKey)
-
-    fun restoreConversationBackup(backup: ConversationBackup) {
-        store.restoreConversationBackup(backup)
-    }
-
-    fun clearConversationMessages(conversationKey: String) {
-        store.clearConversationMessages(conversationKey)
-    }
-
-    fun updateDraft(conversationKey: String, text: String) {
-        store.updateDraft(conversationKey, text)
-    }
-
-    fun panicWipe() {
-        stopMesh()
-        store.wipeAll()
-        _peers.value = emptyList()
-        _activeConversationKey.value = null
-        _nickname.value = store.loadNickname()
-        synchronized(coreLock) {
-            nodeHandle = MeshRuntime.panicReset(appContext, _nickname.value)
-            if (nodeHandle != 0L) {
-                refreshStateFromEngineLocked()
-            } else {
-                initNativeNode()
-            }
-        }
-        startMesh()
-    }
-
-    // ---- Rust Engine Output & Event Folding ---------------------------------
-
-    private fun emitEngineOutputLocked(blob: ByteArray?) {
-        if (blob == null) return
-        val parsed = CypherBridge.parseResponse(blob)
-        bleLinkLayer.executeCommands(parsed.commands)
-        if (parsed.eventsJson != "[]") {
-            processEngineEventsJsonLocked(parsed.eventsJson)
-        }
-    }
-
-    private fun onEngineEvents(eventsJson: String) {
-        synchronized(coreLock) {
-            processEngineEventsJsonLocked(eventsJson)
-        }
-    }
-
-    private fun processEngineEventsJsonLocked(eventsJson: String) {
-        val events = runCatching { JSONArray(eventsJson) }.getOrNull() ?: return
-        var peersChanged = false
-
-        for (i in 0 until events.length()) {
-            val event = events.optJSONObject(i) ?: continue
-            val keys = event.keys()
-            if (!keys.hasNext()) continue
-            val variant = keys.next()
-            val f = event.optJSONObject(variant) ?: JSONObject()
-
-            when (variant) {
-                "PublicMessageReceived" -> {
-                    val senderHex = f.optString("sender").lowercase()
-                    if (senderHex.isNotEmpty() && senderHex == _myPeerIdHex.value.lowercase()) {
-                        continue
-                    }
-                    if (store.isBlocked(senderHex)) continue
-
-                    val rawNick = f.optString("nickname")
-                    val nick = rawNick.ifBlank { resolvePeerNickname(senderHex) }
-                    if (senderHex.isNotEmpty() && rawNick.isNotBlank()) {
-                        store.rememberPeerName(senderHex, rawNick)
-                    }
-                    val isRelayed = f.optBoolean("is_relayed", false)
-                    if (isRelayed && senderHex.isNotEmpty() && (peerHopCounts[senderHex] ?: 1) < 2) {
-                        peerHopCounts[senderHex] = 2
-                    }
-
-                    val rawContent = f.optString("content")
-                    val (channelKey, contentWithoutChannel) = extractWireChannel(rawContent)
-                    val (cleanText, parsedReply) = decodeWireReply(contentWithoutChannel)
-                    val ts = f.optLong("timestamp_ms").takeIf { it > 0L } ?: System.currentTimeMillis()
-                    val msgId = f.optString("message_id").ifBlank { "$senderHex-$ts" }
-
-                    store.appendMessage(
-                        ChatMessage(
-                            id = msgId,
-                            conversationKey = channelKey,
-                            senderPeerHex = senderHex,
-                            senderNickname = nick,
-                            text = cleanText,
-                            timestampMs = ts,
-                            isOutgoing = false,
-                            isPrivate = false,
-                            replyTo = parsedReply,
-                        ),
-                        activeConversationKey = _activeConversationKey.value,
-                    )
-
-                    if (cleanText.contains("@${_nickname.value}", ignoreCase = true) &&
-                        !store.mutedConversations.value.contains(channelKey)
-                    ) {
-                        maybePostNotification(
-                            conversationKey = channelKey,
-                            title = "$nick mentioned you in ${resolveConversationTitle(channelKey)}",
-                            body = cleanText,
-                        )
-                    }
-                }
-
-                "NoisePayloadReceived" -> {
-                    val peerHex = f.optString("peer").lowercase()
-                    val payloadType = f.optInt("payload_type")
-                    val payloadArr = f.optJSONArray("payload")
-                    onNoisePayloadLocked(peerHex, payloadType, payloadArr)
-                }
-
-                "MeshPingResult" -> {
-                    val peerHex = f.optString("peer").lowercase()
-                    val rttMs = f.optLong("rtt_ms", 0L)
-                    val hops = f.optInt("hops", 1).coerceIn(1, 7)
-                    if (peerHex.isNotBlank()) {
-                        peerHopCounts[peerHex] = hops
-                        appendSystemMessage(
-                            conversationKey = peerHex,
-                            text = "Mesh ping reply from ${resolvePeerNickname(peerHex)}: ${rttMs}ms • $hops hop(s)",
-                        )
-                        peersChanged = true
-                    }
-                }
-
-                "PeerConnected", "PeerDisconnected", "PeerListUpdated" -> {
-                    peersChanged = true
-                }
-
-                "MessageDeliveryStatusUpdated" -> {
-                    val msgId = f.optString("message_id")
-                    val failed = f.optBoolean("failed", false)
-                    val sending = f.optBoolean("sending", false)
-                    if (msgId.isNotBlank()) {
-                        when {
-                            failed -> store.updateDeliveryState(msgId, DeliveryState.FAILED)
-                            sending -> store.updateDeliveryState(msgId, DeliveryState.SENDING)
-                            else -> store.updateDeliveryState(msgId, DeliveryState.SENT)
-                        }
-                    }
-                }
-
-                "SessionEstablished" -> {
-                    val peerHex = f.optString("peer").ifBlank { f.optString("peerId") }.lowercase()
-                    if (peerHex.isNotBlank()) {
-                        appendSystemMessage(
-                            conversationKey = peerHex,
-                            text = "Noise XX end-to-end encrypted session established",
-                        )
-                    }
-                    peersChanged = true
-                }
-
-                "SessionFailed" -> {
-                    peersChanged = true
-                }
-
-                "FileTransferReceived" -> {
-                    foldFileTransferLocked(f)
-                }
-            }
-        }
-
-        if (peersChanged) {
-            refreshStateFromEngineLocked()
-        }
-    }
-
-    private fun extractWireChannel(rawContent: String): Pair<String, String> {
-        val match = WIRE_CHANNEL_REGEX.matchEntire(rawContent)
-            ?: return MeshStore.BROADCAST_CONVERSATION_KEY to rawContent
-        val channelTag = store.normalizeChannelKey(match.groupValues[1])
-        val body = match.groupValues[2]
-        return channelTag to body
-    }
-
-    private fun onNoisePayloadLocked(peerHex: String, payloadType: Int, payload: JSONArray?) {
-        if (peerHex.isEmpty() || store.isBlocked(peerHex)) return
-        val bytes = ByteArray(payload?.length() ?: 0)
-        if (payload != null) {
-            for (i in 0 until payload.length()) {
-                bytes[i] = payload.optInt(i).toByte()
-            }
-        }
-        when (payloadType) {
-            0x01 -> {
-                val decoded = decodePrivateMessage(bytes) ?: return
-                val msgId = decoded.first
-                val rawContent = decoded.second
-                val (cleanContent, parsedReply) = decodeWireReply(rawContent)
-                val nick = resolvePeerNickname(peerHex)
-
-                store.appendMessage(
-                    ChatMessage(
-                        id = msgId.ifBlank { UUID.randomUUID().toString() },
-                        conversationKey = peerHex,
-                        senderPeerHex = peerHex,
-                        senderNickname = nick,
-                        text = cleanContent,
-                        timestampMs = System.currentTimeMillis(),
-                        isOutgoing = false,
-                        isPrivate = true,
-                        replyTo = parsedReply,
-                    ),
-                    activeConversationKey = _activeConversationKey.value,
-                )
-
-                if (msgId.isNotBlank() && nodeHandle != 0L) {
-                    val ackOut = runCatching {
-                        CypherBridge.nativeSendDeliveryAck(nodeHandle, peerHex, msgId)
-                    }.getOrNull()
-                    emitEngineOutputLocked(ackOut)
-                    if (_activeConversationKey.value == peerHex) {
-                        val readOut = runCatching {
-                            CypherBridge.nativeSendReadReceipt(nodeHandle, peerHex, msgId)
-                        }.getOrNull()
-                        emitEngineOutputLocked(readOut)
-                    }
-                }
-
-                if (!store.mutedConversations.value.contains(peerHex)) {
-                    maybePostNotification(
-                        conversationKey = peerHex,
-                        title = nick,
-                        body = cleanContent,
-                    )
-                }
-            }
-
-            0x02 -> {
-                val messageId = decodeReceiptMessageId(bytes)
-                if (messageId != null) {
-                    store.updateDeliveryState(messageId, DeliveryState.READ)
-                }
-            }
-
-            0x03 -> {
-                val messageId = decodeReceiptMessageId(bytes)
-                if (messageId != null) {
-                    store.updateDeliveryState(messageId, DeliveryState.DELIVERED)
-                }
-            }
-        }
-    }
-
-    private fun decodePrivateMessage(bytes: ByteArray): Pair<String, String>? {
-        return try {
-            var offset = 0
-            var id: String? = null
-            var content: String? = null
-            while (offset + 2 <= bytes.size) {
-                val tag = bytes[offset].toInt() and 0xFF
-                val len = bytes[offset + 1].toInt() and 0xFF
-                if (offset + 2 + len > bytes.size) break
-                val body = bytes.copyOfRange(offset + 2, offset + 2 + len)
-                when (tag) {
-                    0x00 -> id = String(body, Charsets.UTF_8)
-                    0x01 -> content = String(body, Charsets.UTF_8)
-                }
-                offset += 2 + len
-            }
-            if (id != null && content != null) id to content else null
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun decodeReceiptMessageId(bytes: ByteArray): String? {
-        if (bytes.isEmpty()) return null
-        var end = bytes.size
-        while (end > 0 && bytes[end - 1] == 0.toByte()) end--
-        return String(bytes, 0, end, Charsets.UTF_8).takeIf { it.isNotEmpty() }
-    }
-
-    private fun foldFileTransferLocked(event: JSONObject) {
-        val senderHex = event.optString("sender").lowercase()
-        if (senderHex.isEmpty() || store.isBlocked(senderHex)) return
-        val file = event.optJSONObject("file") ?: return
-        val fileName = file.optString("file_name", "attachment")
-        val mimeType = file.optString("mime_type", "application/octet-stream")
-        val content = file.optJSONArray("content")?.let { arr ->
-            ByteArray(arr.length()) { i -> arr.optInt(i).toByte() }
-        } ?: return
-        if (content.isEmpty()) return
-
-        val kind = when {
-            mimeType.startsWith("image/") -> AttachmentKind.IMAGE
-            mimeType.startsWith("audio/") -> AttachmentKind.AUDIO
-            else -> AttachmentKind.FILE
-        }
-        val msgId = UUID.randomUUID().toString()
-        val attachment = store.saveIncomingMedia(msgId, kind, fileName, mimeType, content)
-        val isPrivate = event.optBoolean("is_private", false)
-        val convKey = if (isPrivate) senderHex else MeshStore.BROADCAST_CONVERSATION_KEY
-        val nick = resolvePeerNickname(senderHex)
-
-        store.appendMessage(
-            ChatMessage(
-                id = msgId,
-                conversationKey = convKey,
-                senderPeerHex = senderHex,
-                senderNickname = nick,
-                text = if (kind == AttachmentKind.AUDIO) "Voice note" else fileName,
-                timestampMs = System.currentTimeMillis(),
-                isOutgoing = false,
-                isPrivate = isPrivate,
-                attachment = attachment,
-            ),
-            activeConversationKey = _activeConversationKey.value,
-        )
-
-        if (isPrivate && !store.mutedConversations.value.contains(senderHex)) {
-            maybePostNotification(
-                conversationKey = senderHex,
-                title = nick,
-                body = if (kind == AttachmentKind.AUDIO) "Sent an encrypted voice note" else "Sent $fileName",
-            )
-        }
-    }
-
-    private fun refreshStateFromEngineLocked() {
-        if (nodeHandle == 0L) return
-        val blob = runCatching { CypherBridge.nativeStateJson(nodeHandle) }.getOrNull() ?: return
-        val root = runCatching { JSONObject(String(blob, Charsets.UTF_8)) }.getOrNull() ?: return
-
-        val myId = root.optString("peerId").lowercase()
-        if (myId.isNotEmpty()) {
-            _myPeerIdHex.value = myId
-        }
-        val myFp = root.optString("fingerprint").ifBlank {
-            MeshStore.DEFAULT_LOCAL_FINGERPRINT_HEX
-        }
-        _myFingerprintHex.value = myFp
-        _myStaticPublicKeyHex.value = myFp
-
-        val arr = root.optJSONArray("peers") ?: JSONArray()
-        val favs = store.favorites.value
-        val verifiedMap = store.verifiedPeers.value
-        val blockedSet = store.blockedPeers.value
-        val knownNames = store.knownPeerNames.value
-        val latestRssi = bleLinkLayer.latestRssi.value
-
-        val list = ArrayList<PeerUiModel>(arr.length())
-        for (i in 0 until arr.length()) {
-            val p = arr.optJSONObject(i) ?: continue
-            val peerHex = p.optString("peerId").lowercase()
-            if (peerHex.isEmpty()) continue
-            val rawNick = p.optString("nickname")
-            val nick = rawNick.ifBlank { knownNames[peerHex] ?: "anon#${peerHex.takeLast(3)}" }
-            if (rawNick.isNotBlank() && rawNick != "anon") {
-                store.rememberPeerName(peerHex, rawNick)
-            }
-            val connected = p.optBoolean("connected", false)
-            val secureSession = p.optBoolean("secureSession", false)
-            val noisePubKey = p.optString("noisePublicKey")
-            val fp = noisePubKey.ifBlank {
-                verifiedMap[peerHex] ?: PeerIdentity.fingerprintHex(peerHex)
-            }
-            val isVerified = p.optBoolean("verified", false) || verifiedMap.containsKey(peerHex)
-            val isFavorite = p.optBoolean("favorite", false) || favs.contains(peerHex)
-            val rssiVal = if (connected) (latestRssi ?: -62) else null
-            val hopsVal = peerHopCounts[peerHex] ?: if (connected) 1 else 2
-
-            list.add(
-                PeerUiModel(
-                    peerIdHex = peerHex,
-                    nickname = nick,
-                    sessionState = if (secureSession) "established" else if (connected) "handshaking" else "none",
-                    isKnown = true,
-                    lastSeenMs = p.optLong("lastSeenMs", 0L),
-                    rssi = rssiVal,
-                    hops = hopsVal,
-                    distanceMeters = PeerIdentity.estimateDistanceMeters(rssiVal, hopsVal),
-                    isDirectlyConnected = connected,
-                    isFavorite = isFavorite,
-                    isVerified = isVerified,
-                    isBlocked = blockedSet.contains(peerHex),
-                    fingerprintHex = fp,
-                ),
-            )
-        }
-
-        _peers.value = list.sortedWith(
-            compareByDescending<PeerUiModel> { it.isFavorite }
-                .thenByDescending { it.isDirectlyConnected }
-                .thenByDescending { it.sessionState == "established" }
-                .thenBy { it.nickname.lowercase() },
-        )
-    }
-
-    private fun appendSystemMessage(conversationKey: String, text: String) {
-        store.appendMessage(
-            ChatMessage(
-                id = "sys-${UUID.randomUUID()}",
-                conversationKey = conversationKey,
-                senderPeerHex = _myPeerIdHex.value,
-                senderNickname = "system",
-                text = text,
-                timestampMs = System.currentTimeMillis(),
-                isOutgoing = false,
-                isPrivate = !conversationKey.startsWith("#"),
-                isSystem = true,
-            ),
-            activeConversationKey = _activeConversationKey.value,
-        )
-    }
-
-    private fun encodeWireReply(cleanText: String, replyTo: ReplyReference?): String {
-        if (replyTo == null) return cleanText
-        val singleLinePreview = replyTo.previewText
-            .replace('\n', ' ')
-            .trim()
-            .take(80)
-        val cleanSender = replyTo.senderNickname.replace(':', '_').trim().take(24)
-        return "> @$cleanSender: $singleLinePreview\n$cleanText"
-    }
-
-    private fun decodeWireReply(rawText: String): Pair<String, ReplyReference?> {
-        val match = WIRE_REPLY_REGEX.matchEntire(rawText) ?: return rawText to null
-        val sender = match.groupValues[1].trim()
-        val preview = match.groupValues[2].trim()
-        val body = match.groupValues[3].trim()
-        return body to ReplyReference(
-            messageId = "",
-            senderNickname = sender,
-            previewText = preview,
-        )
-    }
-
-    private fun formatDurationShort(durationMs: Long): String {
-        val totalSec = (durationMs / 1000L).coerceAtLeast(1L)
-        val mins = totalSec / 60L
-        val secs = totalSec % 60L
-        return "%d:%02d".format(mins, secs)
-    }
-
-    private fun queryFileName(uri: Uri): String? = runCatching {
-        appContext.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
-        }
-    }.getOrNull()
-
-    private fun ensureDmNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val nm = appContext.getSystemService(NotificationManager::class.java) ?: return
-        val channel = NotificationChannel(
-            DM_NOTIFICATION_CHANNEL,
-            appContext.getString(R.string.dm_channel_name),
-            NotificationManager.IMPORTANCE_HIGH,
-        ).apply {
-            description = appContext.getString(R.string.dm_channel_desc)
-        }
-        nm.createNotificationChannel(channel)
-    }
-
-    private fun maybePostNotification(conversationKey: String, title: String, body: String) {
-        if (_activeConversationKey.value == conversationKey) return
-        val nm = appContext.getSystemService(NotificationManager::class.java) ?: return
-        val openIntent = Intent(appContext, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("conversation_key", conversationKey)
-        }
-        val pending = PendingIntent.getActivity(
-            appContext,
-            conversationKey.hashCode(),
-            openIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val notification = NotificationCompat.Builder(appContext, DM_NOTIFICATION_CHANNEL)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .setContentIntent(pending)
-            .build()
-        runCatching {
-            nm.notify(DM_NOTIFICATION_BASE_ID + (conversationKey.hashCode() and 0x3FF), notification)
-        }
+        return MeshStore.resolvePeerNickname(conversationKey)
     }
 }

@@ -1,5 +1,7 @@
 package chat.cypher.android.ui
 
+import android.content.Intent
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -7,264 +9,273 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import chat.cypher.android.MeshForegroundService
 import chat.cypher.android.core.MeshController
 import chat.cypher.android.core.MeshStore
-import chat.cypher.android.core.PeerIdentity
+import chat.cypher.android.core.PeerEntry
 import chat.cypher.android.core.PeerUiModel
-import chat.cypher.android.ui.chats.ChatThreadScreen
+import chat.cypher.android.data.PeerEntity
+import chat.cypher.android.onboarding.OnboardingPreferences
+import chat.cypher.android.ui.chats.ChatThread
 import chat.cypher.android.ui.chats.ChatsTab
-import chat.cypher.android.ui.chats.CipherHomeSegment
-import chat.cypher.android.ui.components.AboutCypherSheet
+import chat.cypher.android.ui.chats.HomeSubTab
 import chat.cypher.android.ui.components.MeshNetworkScreen
 import chat.cypher.android.ui.components.PanicModeScreen
-import chat.cypher.android.ui.components.SecurityVerificationSheet
+import chat.cypher.android.ui.components.SecurityVerificationScreen
 import chat.cypher.android.ui.profile.ProfileTab
-import kotlinx.coroutines.launch
+import java.util.Locale
 
-private enum class CipherOverlayScreen {
-    NONE,
-    SETTINGS,
+private enum class FullScreenRoute {
+    HOME,
+    CHAT_THREAD,
     MESH_NETWORK,
     SECURITY_VERIFICATION,
+    SETTINGS,
     PANIC_MODE,
 }
 
 @Composable
-fun AppScaffold(
-    controller: MeshController,
+fun CypherAppRoot(
+    onRequestPermissions: () -> Unit,
+    onRequestBatteryOptimization: () -> Unit,
+    onEmergencyWipeCompleted: () -> Unit,
 ) {
-    val activeConversationKey by controller.activeConversationKey.collectAsState()
-    val peers by controller.peers.collectAsState()
-    val verifiedMap by controller.store.verifiedPeers.collectAsState()
-    val myPeerIdHex by controller.myPeerIdHex.collectAsState()
-    val myFingerprintHex by controller.myFingerprintHex.collectAsState()
-    val isMeshRunning by controller.isMeshRunning.collectAsState()
-    val coreVersion by controller.coreVersion.collectAsState()
+    val context = LocalContext.current
+    val activeConversation by MeshStore.activeConversation.collectAsState()
+    val peers by MeshStore.peers.collectAsState()
+    val knownPeers by MeshStore.knownPeers.collectAsState()
+    val verifiedPeers by MeshStore.verifiedPeers.collectAsState()
+    val localIdentityHex by MeshStore.localIdentityHex.collectAsState()
 
-    var selectedHomeSegment by rememberSaveable { mutableStateOf(CipherHomeSegment.CHATS) }
-    var overlayScreen by rememberSaveable { mutableStateOf(CipherOverlayScreen.NONE) }
-    var verificationPeerHex by rememberSaveable { mutableStateOf<String?>(null) }
-    var showAboutSheet by rememberSaveable { mutableStateOf(false) }
+    var currentRoute by rememberSaveable { mutableStateOf(FullScreenRoute.HOME) }
+    var previousRoute by rememberSaveable { mutableStateOf(FullScreenRoute.HOME) }
+    var selectedHomeTab by rememberSaveable { mutableStateOf(HomeSubTab.CHATS) }
+    var verificationPeerKey by rememberSaveable { mutableStateOf("") }
 
-    val snackbarHostState = remember { SnackbarHostState() }
-    val coroutineScope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        MeshController.start(context)
+    }
 
-    Scaffold(
-        containerColor = Color(0xFF0D0E17),
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = innerPadding.calculateBottomPadding()),
-        ) {
-            AnimatedContent(
-                targetState = Pair(overlayScreen, activeConversationKey),
-                transitionSpec = {
-                    fadeIn(animationSpec = tween(180)) togetherWith
-                        fadeOut(animationSpec = tween(150))
-                },
-                label = "cipher_screen_router",
-            ) { (currentOverlay, currentConvKey) ->
-                when {
-                    currentOverlay == CipherOverlayScreen.PANIC_MODE -> {
-                        PanicModeScreen(
-                            onClearNow = {
-                                controller.panicWipe()
-                                overlayScreen = CipherOverlayScreen.NONE
-                                selectedHomeSegment = CipherHomeSegment.CHATS
-                            },
-                            onCancel = {
-                                overlayScreen = CipherOverlayScreen.NONE
-                            },
-                        )
-                    }
+    val performEmergencyWipe: () -> Unit = {
+        MeshController.stop()
+        runCatching {
+            context.stopService(Intent(context, MeshForegroundService::class.java))
+        }
+        MeshStore.emergencyWipe(context)
+        OnboardingPreferences.resetOnboarding(context)
+        onEmergencyWipeCompleted()
+    }
 
-                    currentOverlay == CipherOverlayScreen.SECURITY_VERIFICATION -> {
-                        val targetHex = (verificationPeerHex ?: MeshStore.RICK_PEER_KEY).lowercase()
-                        val targetPeer = resolveVerificationPeerModel(
-                            peerHex = targetHex,
-                            peers = peers,
-                            verifiedMap = verifiedMap,
-                            controller = controller,
-                        )
-                        SecurityVerificationSheet(
-                            peer = targetPeer,
-                            myPeerIdHex = myPeerIdHex,
-                            myFingerprintHex = myFingerprintHex,
-                            onMarkVerified = {
-                                controller.markPeerVerified(targetPeer.peerIdHex)
-                            },
-                            onUnverify = {
-                                controller.unverifyPeer(targetPeer.peerIdHex)
-                            },
-                            onDismiss = {
-                                overlayScreen = CipherOverlayScreen.NONE
-                            },
-                        )
-                    }
-
-                    currentOverlay == CipherOverlayScreen.MESH_NETWORK -> {
-                        MeshNetworkScreen(
-                            peers = peers,
-                            isMeshRunning = isMeshRunning,
-                            onBack = {
-                                overlayScreen = CipherOverlayScreen.NONE
-                            },
-                            onSelectPeer = { peerHex ->
-                                overlayScreen = CipherOverlayScreen.NONE
-                                controller.openConversation(peerHex)
-                            },
-                            onAnnouncePulse = {
-                                controller.announceNow()
-                            },
-                        )
-                    }
-
-                    currentOverlay == CipherOverlayScreen.SETTINGS -> {
-                        ProfileTab(
-                            controller = controller,
-                            onBack = {
-                                overlayScreen = CipherOverlayScreen.NONE
-                            },
-                            onOpenVerification = { peerHex ->
-                                verificationPeerHex = peerHex ?: MeshStore.RICK_PEER_KEY
-                                overlayScreen = CipherOverlayScreen.SECURITY_VERIFICATION
-                            },
-                            onOpenAbout = {
-                                showAboutSheet = true
-                            },
-                            onOpenMeshNetwork = {
-                                overlayScreen = CipherOverlayScreen.MESH_NETWORK
-                            },
-                            onOpenChannels = {
-                                overlayScreen = CipherOverlayScreen.NONE
-                                controller.openConversation(null)
-                                selectedHomeSegment = CipherHomeSegment.CHANNELS
-                            },
-                            onOpenPanicMode = {
-                                overlayScreen = CipherOverlayScreen.PANIC_MODE
-                            },
-                        )
-                    }
-
-                    currentConvKey != null -> {
-                        ChatThreadScreen(
-                            controller = controller,
-                            conversationKey = currentConvKey,
-                            onBack = {
-                                controller.openConversation(null)
-                            },
-                            onOpenVerification = { peerHex ->
-                                verificationPeerHex = peerHex ?: if (currentConvKey.startsWith("#")) {
-                                    MeshStore.RICK_PEER_KEY
-                                } else {
-                                    currentConvKey
-                                }
-                                overlayScreen = CipherOverlayScreen.SECURITY_VERIFICATION
-                            },
-                            onOpenMeshNetwork = {
-                                overlayScreen = CipherOverlayScreen.MESH_NETWORK
-                            },
-                        )
-                    }
-
-                    else -> {
-                        ChatsTab(
-                            controller = controller,
-                            selectedSegment = selectedHomeSegment,
-                            onSelectSegment = { selectedHomeSegment = it },
-                            onOpenConversation = { key ->
-                                controller.openConversation(key)
-                            },
-                            onOpenMeshNetwork = {
-                                overlayScreen = CipherOverlayScreen.MESH_NETWORK
-                            },
-                            onOpenSecurityVerification = { peerHex ->
-                                verificationPeerHex = peerHex ?: MeshStore.RICK_PEER_KEY
-                                overlayScreen = CipherOverlayScreen.SECURITY_VERIFICATION
-                            },
-                            onOpenSettings = {
-                                overlayScreen = CipherOverlayScreen.SETTINGS
-                            },
-                            onOpenPanicMode = {
-                                overlayScreen = CipherOverlayScreen.PANIC_MODE
-                            },
-                            onConversationDeleted = { backup ->
-                                coroutineScope.launch {
-                                    val result = snackbarHostState.showSnackbar(
-                                        message = "Conversation deleted",
-                                        actionLabel = "Undo",
-                                        duration = SnackbarDuration.Short,
-                                    )
-                                    if (result == SnackbarResult.ActionPerformed) {
-                                        controller.restoreConversationBackup(backup)
-                                    }
-                                }
-                            },
-                        )
-                    }
+    BackHandler(enabled = currentRoute != FullScreenRoute.HOME || selectedHomeTab != HomeSubTab.CHATS) {
+        when (currentRoute) {
+            FullScreenRoute.HOME -> {
+                if (selectedHomeTab != HomeSubTab.CHATS) {
+                    selectedHomeTab = HomeSubTab.CHATS
                 }
+            }
+            FullScreenRoute.SECURITY_VERIFICATION,
+            FullScreenRoute.PANIC_MODE -> {
+                currentRoute = previousRoute
+            }
+            else -> {
+                currentRoute = FullScreenRoute.HOME
             }
         }
     }
 
-    if (showAboutSheet) {
-        AboutCypherSheet(
-            coreVersion = coreVersion,
-            onDismiss = { showAboutSheet = false },
-        )
+    Box(modifier = Modifier.fillMaxSize()) {
+        AnimatedContent(
+            targetState = currentRoute,
+            transitionSpec = {
+                fadeIn(animationSpec = tween(180)) togetherWith
+                    fadeOut(animationSpec = tween(140))
+            },
+            label = "cipher_full_screen_router",
+        ) { route ->
+            when (route) {
+                FullScreenRoute.HOME -> {
+                    ChatsTab(
+                        selectedTab = selectedHomeTab,
+                        onSelectTab = { tab ->
+                            selectedHomeTab = tab
+                        },
+                        onOpenConversation = { convKey ->
+                            MeshStore.selectConversation(convKey)
+                            previousRoute = FullScreenRoute.HOME
+                            currentRoute = FullScreenRoute.CHAT_THREAD
+                        },
+                        onOpenMeshTopology = {
+                            previousRoute = FullScreenRoute.HOME
+                            currentRoute = FullScreenRoute.MESH_NETWORK
+                        },
+                        onOpenSettings = {
+                            previousRoute = FullScreenRoute.HOME
+                            currentRoute = FullScreenRoute.SETTINGS
+                        },
+                        onOpenPanicMode = {
+                            previousRoute = FullScreenRoute.HOME
+                            currentRoute = FullScreenRoute.PANIC_MODE
+                        },
+                        onOpenSecurityVerification = { peerKey ->
+                            verificationPeerKey = peerKey
+                            previousRoute = FullScreenRoute.HOME
+                            currentRoute = FullScreenRoute.SECURITY_VERIFICATION
+                        },
+                        onPanicWipe = performEmergencyWipe,
+                    )
+                }
+
+                FullScreenRoute.CHAT_THREAD -> {
+                    ChatThread(
+                        conversationKey = activeConversation,
+                        onBack = {
+                            currentRoute = FullScreenRoute.HOME
+                        },
+                        onOpenSecurityVerification = { peerKey ->
+                            verificationPeerKey = peerKey
+                            previousRoute = FullScreenRoute.CHAT_THREAD
+                            currentRoute = FullScreenRoute.SECURITY_VERIFICATION
+                        },
+                    )
+                }
+
+                FullScreenRoute.MESH_NETWORK -> {
+                    MeshNetworkScreen(
+                        onBack = {
+                            currentRoute = FullScreenRoute.HOME
+                        },
+                        onSelectPeer = { peerKey ->
+                            MeshStore.selectConversation(peerKey)
+                            currentRoute = FullScreenRoute.CHAT_THREAD
+                        },
+                    )
+                }
+
+                FullScreenRoute.SECURITY_VERIFICATION -> {
+                    val peerUi = remember(verificationPeerKey, peers, knownPeers, verifiedPeers) {
+                        resolveVerificationPeerModel(
+                            peerKey = verificationPeerKey,
+                            peers = peers,
+                            knownPeers = knownPeers,
+                            verifiedPeers = verifiedPeers,
+                        )
+                    }
+                    val normKey = peerUi?.peerKey?.lowercase(Locale.US).orEmpty()
+                    val isVerified = normKey.isNotEmpty() && (
+                        normKey in verifiedPeers ||
+                            knownPeers[normKey]?.verified == true
+                        )
+
+                    SecurityVerificationScreen(
+                        peer = peerUi,
+                        localIdentityHex = localIdentityHex,
+                        isVerified = isVerified,
+                        onToggleVerified = {
+                            if (normKey.isNotEmpty()) {
+                                MeshStore.toggleVerifiedPeer(normKey)
+                            }
+                        },
+                        onBack = {
+                            currentRoute = previousRoute
+                        },
+                    )
+                }
+
+                FullScreenRoute.SETTINGS -> {
+                    ProfileTab(
+                        onBack = {
+                            currentRoute = FullScreenRoute.HOME
+                        },
+                        onOpenMeshNetwork = {
+                            previousRoute = FullScreenRoute.SETTINGS
+                            currentRoute = FullScreenRoute.MESH_NETWORK
+                        },
+                        onOpenSecurityVerification = {
+                            verificationPeerKey = peers.firstOrNull()?.peerKeyHex.orEmpty()
+                            previousRoute = FullScreenRoute.SETTINGS
+                            currentRoute = FullScreenRoute.SECURITY_VERIFICATION
+                        },
+                        onOpenChannels = {
+                            selectedHomeTab = HomeSubTab.CHANNELS
+                            currentRoute = FullScreenRoute.HOME
+                        },
+                        onOpenPanicMode = {
+                            previousRoute = FullScreenRoute.SETTINGS
+                            currentRoute = FullScreenRoute.PANIC_MODE
+                        },
+                        onRequestBatteryExemption = onRequestBatteryOptimization,
+                        onEmergencyWipe = performEmergencyWipe,
+                    )
+                }
+
+                FullScreenRoute.PANIC_MODE -> {
+                    PanicModeScreen(
+                        onClearNow = performEmergencyWipe,
+                        onCancel = {
+                            currentRoute = previousRoute
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 
 private fun resolveVerificationPeerModel(
-    peerHex: String,
-    peers: List<PeerUiModel>,
-    verifiedMap: Map<String, String>,
-    controller: MeshController,
-): PeerUiModel {
-    val cleanHex = peerHex.lowercase()
-    val live = peers.firstOrNull { it.peerIdHex.equals(cleanHex, ignoreCase = true) }
-    if (live != null) return live
+    peerKey: String,
+    peers: List<PeerEntry>,
+    knownPeers: Map<String, PeerEntity>,
+    verifiedPeers: Set<String>,
+): PeerUiModel? {
+    val norm = peerKey.trim().lowercase(Locale.US)
+    if (norm.isBlank() || norm.startsWith("#")) return null
 
-    val isRick = cleanHex == MeshStore.RICK_PEER_KEY
-    val nick = if (isRick) "Rick" else controller.resolvePeerNickname(cleanHex)
-    val fp = when {
-        isRick -> MeshStore.RICK_FINGERPRINT_HEX
-        verifiedMap[cleanHex] != null -> verifiedMap.getValue(cleanHex)
-        else -> PeerIdentity.fingerprintHex(cleanHex)
+    val live = peers.firstOrNull { it.peerKeyHex.equals(norm, ignoreCase = true) }
+    if (live != null) {
+        return PeerUiModel(
+            peerKey = live.peerKeyHex,
+            nickname = live.nickname,
+            connected = live.connected,
+            sessionEstablished = live.sessionEstablished,
+            rssi = live.rssi,
+            hops = live.hops,
+            verified = live.verified || norm in verifiedPeers,
+            distanceMeters = null,
+        )
     }
-    val isVerified = isRick || verifiedMap.containsKey(cleanHex)
+
+    val known = knownPeers[norm]
+    if (known != null) {
+        return PeerUiModel(
+            peerKey = known.peerKeyHex,
+            nickname = known.customAlias.ifBlank { known.nickname },
+            connected = false,
+            sessionEstablished = false,
+            rssi = known.lastRssi,
+            hops = known.lastHops,
+            verified = known.verified || norm in verifiedPeers,
+            distanceMeters = null,
+        )
+    }
 
     return PeerUiModel(
-        peerIdHex = cleanHex,
-        nickname = nick,
-        sessionState = "established",
-        isKnown = true,
-        lastSeenMs = System.currentTimeMillis(),
-        rssi = -56,
+        peerKey = norm,
+        nickname = MeshStore.resolvePeerNickname(norm),
+        connected = false,
+        sessionEstablished = false,
+        rssi = null,
         hops = 1,
-        distanceMeters = 12,
-        isDirectlyConnected = true,
-        isFavorite = isRick,
-        isVerified = isVerified,
-        isBlocked = controller.store.isBlocked(cleanHex),
-        fingerprintHex = fp,
+        verified = norm in verifiedPeers,
+        distanceMeters = null,
     )
 }

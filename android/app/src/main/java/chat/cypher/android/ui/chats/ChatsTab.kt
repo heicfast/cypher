@@ -1,1390 +1,951 @@
 package chat.cypher.android.ui.chats
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.HelpOutline
-import androidx.compose.material.icons.filled.MarkChatRead
-import androidx.compose.material.icons.filled.MarkChatUnread
-import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.NotificationsNone
-import androidx.compose.material.icons.filled.NotificationsOff
-import androidx.compose.material.icons.filled.NotificationsPaused
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.Hub
+import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.PushPin
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.VerifiedUser
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import chat.cypher.android.core.AttachmentKind
 import chat.cypher.android.core.ChatMessage
+import chat.cypher.android.core.ConversationBackup
+import chat.cypher.android.core.MeshController
 import chat.cypher.android.core.MeshStore
-import chat.cypher.android.core.PeerUiModel
-import chat.cypher.android.ui.components.AuroraCurvedHeaderBox
-import chat.cypher.android.ui.components.DeliveryReceiptIcon
-import chat.cypher.android.ui.components.FrostedCircleIconButton
+import chat.cypher.android.ui.components.CipherChainLogo
 import chat.cypher.android.ui.components.PeerAvatar
 import chat.cypher.android.ui.components.UnreadCountBadge
-import chat.cypher.android.ui.theme.LocalCypherPalette
+import chat.cypher.android.ui.contacts.ContactsTab
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.roundToInt
-import kotlinx.coroutines.launch
 
-enum class ChatFilter(val label: String) {
-    INBOX("Inbox"),
-    UNREAD("Unread"),
-    REQUESTS("Requests"),
+enum class CipherHomeSegment(val label: String) {
+    CHATS("Chats"),
+    CHANNELS("Channels"),
+    PEOPLE("People"),
 }
 
-data class ConversationRowSummary(
+private data class ConversationRowItem(
     val conversationKey: String,
-    val peer: PeerUiModel?,
-    val displayName: String,
-    val lastMessage: ChatMessage?,
+    val title: String,
+    val subtitle: String,
+    val timestampLabel: String,
+    val lastTimestampMs: Long,
     val unreadCount: Int,
     val isPinned: Boolean,
     val isMuted: Boolean,
-    val draftText: String?,
+)
+
+private data class ChannelDirectoryEntry(
+    val channelKey: String,
+    val displayTitle: String,
+    val subtitle: String,
+)
+
+private val PRESET_CHANNELS = listOf(
+    ChannelDirectoryEntry(
+        channelKey = "#9q_k6",
+        displayTitle = "#9q_k6",
+        subtitle = "~ 3 mi • CA and AZ",
+    ),
+    ChannelDirectoryEntry(
+        channelKey = "#city-3",
+        displayTitle = "City #3",
+        subtitle = "~ 3 mi • Athens",
+    ),
+    ChannelDirectoryEntry(
+        channelKey = "#mesh-2",
+        displayTitle = "Mesh #2",
+        subtitle = "Bluetooth • 30–160 ft",
+    ),
+    ChannelDirectoryEntry(
+        channelKey = "#block-10",
+        displayTitle = "Block #10",
+        subtitle = "~ 0.1 mi • Athens",
+    ),
+    ChannelDirectoryEntry(
+        channelKey = "#neighborhood-0",
+        displayTitle = "Neighborhood #0",
+        subtitle = "~ 0.8 mi • Athens",
+    ),
+)
+
+private val HOME_CONVERSATION_ORDER = listOf(
+    "#mesh",
+    MeshStore.RICK_PEER_KEY,
+    "#cipher-dev",
+    "#nearby-chat",
+    "#field-team",
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatsTab(
-    peers: List<PeerUiModel>,
-    conversations: Map<String, List<ChatMessage>>,
-    unreadCounts: Map<String, Int>,
-    pinnedConversations: Set<String>,
-    mutedConversations: Set<String>,
-    knownPeerNames: Map<String, String>,
-    drafts: Map<String, String>,
-    myNickname: String = "You",
-    myPeerIdHex: String = "",
-    isMeshRunning: Boolean,
-    connectedBleCount: Int,
+    controller: MeshController,
+    selectedSegment: CipherHomeSegment = CipherHomeSegment.CHATS,
+    onSelectSegment: (CipherHomeSegment) -> Unit = {},
     onOpenConversation: (String) -> Unit,
-    onTogglePin: (String) -> Unit,
-    onToggleMute: (String) -> Unit,
-    onToggleUnread: (String) -> Unit,
-    onDeleteConversation: (String) -> Unit,
-    onVerifyPeer: (PeerUiModel) -> Unit,
-    onAnnouncePulse: () -> Unit,
-    onOpenGuide: () -> Unit,
-    onOpenLounge: () -> Unit = {},
-    onOpenIdentity: () -> Unit = {},
-    onPublishNote: (String) -> Unit = {},
+    onOpenMeshNetwork: () -> Unit = {},
+    onOpenSecurityVerification: (String?) -> Unit = {},
+    onOpenSettings: () -> Unit = {},
+    onOpenPanicMode: () -> Unit = {},
+    onConversationDeleted: (ConversationBackup) -> Unit = {},
 ) {
-    val palette = LocalCypherPalette.current
-    val haptic = LocalHapticFeedback.current
+    val conversations by controller.store.conversations.collectAsState()
+    val unreadCounts by controller.store.unreadCounts.collectAsState()
+    val markedUnread by controller.store.markedUnreadConversations.collectAsState()
+    val pinnedSet by controller.store.pinnedConversations.collectAsState()
+    val mutedSet by controller.store.mutedConversations.collectAsState()
+    val bookmarkedChannels by controller.store.bookmarkedChannels.collectAsState()
+    val joinedChannels by controller.store.joinedChannels.collectAsState()
+    val peers by controller.peers.collectAsState()
 
-    var isSearchExpanded by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedFilter by remember { mutableStateOf(ChatFilter.INBOX) }
-    var contextMenuTarget by remember { mutableStateOf<ConversationRowSummary?>(null) }
-    var showTopOverflowMenu by remember { mutableStateOf(false) }
-    var showAddNoteDialog by remember { mutableStateOf(false) }
-    var showNewMessageSheet by remember { mutableStateOf(false) }
-    var userStatusNote by rememberSaveable { mutableStateOf("Add note") }
-    var draftStatusNote by remember { mutableStateOf("") }
+    var searchActive by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var showOverflowMenu by remember { mutableStateOf(false) }
+    var showComposeSheet by remember { mutableStateOf(false) }
+    var contextMenuTargetKey by remember { mutableStateOf<String?>(null) }
 
-    val peerMap = remember(peers) { peers.associateBy { it.peerIdHex.lowercase() } }
-
-    val broadcastMessages = conversations[MeshStore.BROADCAST_CONVERSATION_KEY].orEmpty()
-    val broadcastLastMessage = broadcastMessages.lastOrNull()
-    val broadcastUnread = unreadCounts[MeshStore.BROADCAST_CONVERSATION_KEY] ?: 0
-    val broadcastDraft = drafts[MeshStore.BROADCAST_CONVERSATION_KEY]
-
-    val publicLoungeRow = remember(
-        broadcastLastMessage,
-        broadcastUnread,
-        pinnedConversations,
-        mutedConversations,
-        broadcastDraft,
-        connectedBleCount,
-        peers,
-    ) {
-        ConversationRowSummary(
-            conversationKey = MeshStore.BROADCAST_CONVERSATION_KEY,
-            peer = null,
-            displayName = "Public Lounge",
-            lastMessage = broadcastLastMessage,
-            unreadCount = broadcastUnread,
-            isPinned = pinnedConversations.contains(MeshStore.BROADCAST_CONVERSATION_KEY),
-            isMuted = mutedConversations.contains(MeshStore.BROADCAST_CONVERSATION_KEY),
-            draftText = broadcastDraft,
-        )
-    }
-
-    val dmRows = remember(
+    val conversationRows = remember(
         conversations,
-        peers,
         unreadCounts,
-        pinnedConversations,
-        mutedConversations,
-        knownPeerNames,
-        drafts,
+        markedUnread,
+        pinnedSet,
+        mutedSet,
+        peers,
+        searchQuery,
     ) {
-        val allPeerKeys = linkedSetOf<String>()
-        conversations.keys
-            .filter { it != MeshStore.BROADCAST_CONVERSATION_KEY }
-            .forEach { allPeerKeys.add(it.lowercase()) }
-        peers.filter { !it.isBlocked }.forEach { allPeerKeys.add(it.peerIdHex.lowercase()) }
-
-        allPeerKeys.mapNotNull { key ->
-            val peer = peerMap[key]
-            if (peer?.isBlocked == true) return@mapNotNull null
-            val msgs = conversations[key].orEmpty()
-            val lastMsg = msgs.lastOrNull()
-            val unread = unreadCounts[key] ?: 0
-            val name = peer?.nickname
-                ?: knownPeerNames[key]
-                ?: lastMsg?.senderNickname?.takeIf { it.isNotBlank() && it != "system" }
-                ?: "Peer ${key.take(4).uppercase()}"
-
-            ConversationRowSummary(
-                conversationKey = key,
-                peer = peer,
-                displayName = name,
-                lastMessage = lastMsg,
-                unreadCount = unread,
-                isPinned = pinnedConversations.contains(key),
-                isMuted = mutedConversations.contains(key),
-                draftText = drafts[key],
-            )
-        }.sortedWith(
-            compareByDescending<ConversationRowSummary> { it.isPinned }
-                .thenByDescending { it.unreadCount > 0 }
-                .thenByDescending { it.lastMessage?.timestampMs ?: it.peer?.lastSeenMs ?: 0L }
-                .thenBy { it.displayName.lowercase() },
+        buildConversationRowItems(
+            controller = controller,
+            conversations = conversations,
+            unreadCounts = unreadCounts,
+            markedUnread = markedUnread,
+            pinnedSet = pinnedSet,
+            mutedSet = mutedSet,
+            query = searchQuery,
         )
-    }
-
-    val allConversationRows = remember(publicLoungeRow, dmRows) {
-        listOf(publicLoungeRow) + dmRows
-    }
-
-    val filteredRows = remember(allConversationRows, selectedFilter, searchQuery) {
-        val q = searchQuery.trim().lowercase()
-        allConversationRows.filter { row ->
-            val matchesFilter = when (selectedFilter) {
-                ChatFilter.INBOX -> true
-                ChatFilter.UNREAD -> row.unreadCount > 0
-                ChatFilter.REQUESTS -> row.peer != null && !row.peer.isVerified
-            }
-            val matchesQuery = if (q.isEmpty()) {
-                true
-            } else {
-                row.displayName.lowercase().contains(q) ||
-                    (row.lastMessage?.text?.lowercase()?.contains(q) == true)
-            }
-            matchesFilter && matchesQuery
-        }
-    }
-
-    val inboxBadgeCount = remember(allConversationRows, unreadCounts) {
-        val unreadSum = unreadCounts.values.sum()
-        if (unreadSum > 0) unreadSum else allConversationRows.size
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(palette.canvas),
+            .background(Color(0xFF0D0E17))
+            .windowInsetsPadding(WindowInsets.statusBars),
     ) {
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("conversations_list"),
-            contentPadding = PaddingValues(bottom = 112.dp),
-        ) {
-            // 1. Luminous Aurora Header + Curved 5-Avatar Constellation Arc
-            item(key = "aurora_header_and_arc") {
-                AuroraCurvedHeaderBox(
-                    curveDepthDp = 24.dp,
-                    modifier = Modifier.padding(bottom = 6.dp),
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 10.dp, bottom = 22.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        // Top Bar: Left circular frosted button · "Message" · Right circular More button
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 20.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            FrostedCircleIconButton(
-                                icon = if (isSearchExpanded) {
-                                    Icons.Filled.Close
-                                } else {
-                                    Icons.AutoMirrored.Filled.KeyboardArrowLeft
-                                },
-                                contentDescription = if (isSearchExpanded) "Close search" else "Open Lounge",
-                                onClick = {
-                                    if (isSearchExpanded) {
-                                        isSearchExpanded = false
-                                        searchQuery = ""
-                                    } else {
-                                        onOpenLounge()
-                                    }
-                                },
-                                modifier = Modifier.testTag("header_left_lounge_button"),
-                            )
-
-                            Text(
-                                text = "Message",
-                                style = MaterialTheme.typography.titleLarge.copy(
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                ),
-                                color = palette.textPrimary,
-                            )
-
-                            Box {
-                                FrostedCircleIconButton(
-                                    icon = Icons.Filled.MoreVert,
-                                    contentDescription = "More options",
-                                    onClick = { showTopOverflowMenu = true },
-                                    modifier = Modifier.testTag("header_more_menu_button"),
-                                )
-
-                                DropdownMenu(
-                                    expanded = showTopOverflowMenu,
-                                    onDismissRequest = { showTopOverflowMenu = false },
-                                    modifier = Modifier.background(palette.surface1),
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Search messages", color = palette.textPrimary) },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Filled.Search,
-                                                contentDescription = null,
-                                                tint = palette.accentSecondary,
-                                            )
-                                        },
-                                        onClick = {
-                                            showTopOverflowMenu = false
-                                            isSearchExpanded = !isSearchExpanded
-                                        },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Live Lounge Grid", color = palette.textPrimary) },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Filled.GraphicEq,
-                                                contentDescription = null,
-                                                tint = palette.accent,
-                                            )
-                                        },
-                                        onClick = {
-                                            showTopOverflowMenu = false
-                                            onOpenLounge()
-                                        },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Profile & Settings", color = palette.textPrimary) },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Filled.Person,
-                                                contentDescription = null,
-                                                tint = palette.encryptedGreen,
-                                            )
-                                        },
-                                        onClick = {
-                                            showTopOverflowMenu = false
-                                            onOpenIdentity()
-                                        },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Broadcast Presence Wave", color = palette.textPrimary) },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Filled.Radar,
-                                                contentDescription = null,
-                                                tint = palette.accentSecondary,
-                                            )
-                                        },
-                                        onClick = {
-                                            showTopOverflowMenu = false
-                                            onAnnouncePulse()
-                                        },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("About & Security Guide", color = palette.textPrimary) },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Filled.HelpOutline,
-                                                contentDescription = null,
-                                                tint = palette.textSecondary,
-                                            )
-                                        },
-                                        onClick = {
-                                            showTopOverflowMenu = false
-                                            onOpenGuide()
-                                        },
-                                    )
-                                }
-                            }
-                        }
-
-                        // Collapsible Search Field
-                        AnimatedVisibility(
-                            visible = isSearchExpanded,
-                            enter = expandVertically() + fadeIn(),
-                            exit = shrinkVertically() + fadeOut(),
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 20.dp, vertical = 12.dp)
-                                    .clip(RoundedCornerShape(24.dp))
-                                    .background(palette.surface1.copy(alpha = 0.90f))
-                                    .border(1.dp, palette.glassBorder, RoundedCornerShape(24.dp))
-                                    .padding(horizontal = 16.dp, vertical = 11.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Search,
-                                    contentDescription = null,
-                                    tint = palette.textMuted,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                                Box(modifier = Modifier.weight(1f)) {
-                                    if (searchQuery.isEmpty()) {
-                                        Text(
-                                            text = "Search conversations…",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = palette.textMuted,
-                                        )
-                                    }
-                                    BasicTextField(
-                                        value = searchQuery,
-                                        onValueChange = { searchQuery = it },
-                                        singleLine = true,
-                                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                            color = palette.textPrimary,
-                                        ),
-                                        cursorBrush = SolidColor(palette.accentSecondary),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .testTag("conversations_search_input"),
-                                    )
-                                }
-                                if (searchQuery.isNotEmpty()) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Close,
-                                        contentDescription = "Clear",
-                                        tint = palette.textMuted,
-                                        modifier = Modifier
-                                            .size(18.dp)
-                                            .clickable { searchQuery = "" },
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // Curved 5-Avatar Constellation Arc + "Add note" Speech Bubble
-                        CurvedAvatarConstellationArc(
-                            myNickname = myNickname,
-                            myPeerIdHex = myPeerIdHex,
-                            statusNote = userStatusNote,
-                            peers = peers.filter { !it.isBlocked },
-                            onAddNoteClick = {
-                                draftStatusNote = if (userStatusNote == "Add note") "" else userStatusNote
-                                showAddNoteDialog = true
-                            },
-                            onPeerClick = { peer ->
-                                onOpenConversation(peer.peerIdHex)
-                            },
-                            onFallbackOrbitClick = {
-                                onOpenLounge()
-                            },
-                        )
-                    }
-                }
-            }
-
-            // 2. Segmented 3-Tab Pill Switcher (Inbox · Unread · Requests)
-            item(key = "segmented_filter_bar") {
-                SegmentedInboxPillBar(
-                    selectedFilter = selectedFilter,
-                    inboxCount = inboxBadgeCount,
-                    unreadCount = unreadCounts.values.sum(),
-                    requestsCount = peers.count { !it.isBlocked && !it.isVerified },
-                    onSelectFilter = { next ->
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        selectedFilter = next
-                    },
-                    modifier = Modifier
-                        .padding(horizontal = 24.dp, vertical = 10.dp),
-                )
-            }
-
-            // 3. Conversation List Rows
-            if (filteredRows.isEmpty()) {
-                item(key = "empty_filter_state") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 32.dp, vertical = 48.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Text(
-                            text = when (selectedFilter) {
-                                ChatFilter.UNREAD -> "All caught up"
-                                ChatFilter.REQUESTS -> "No pending requests"
-                                ChatFilter.INBOX -> "No conversations yet"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            color = palette.textPrimary,
-                        )
-                        Text(
-                            text = "Tap + New below to start a conversation or open the Public Lounge.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.textSecondary,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                }
-            } else {
-                items(
-                    items = filteredRows,
-                    key = { it.conversationKey },
-                ) { row ->
-                    LuxuryConversationItemRow(
-                        row = row,
-                        isBroadcast = row.conversationKey == MeshStore.BROADCAST_CONVERSATION_KEY,
-                        onlineCount = maxOf(connectedBleCount, peers.count { it.isDirectlyConnected }),
-                        onClick = { onOpenConversation(row.conversationKey) },
-                        onLongClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            contextMenuTarget = row
-                        },
-                        onSwipePin = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onTogglePin(row.conversationKey)
-                        },
-                        onSwipeMute = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onToggleMute(row.conversationKey)
-                        },
-                    )
-                }
-            }
-        }
-
-        // 4. Bottom Floating Capsule (+ New · Mic · Send) matching Screen 1 of the reference image
-        FloatingHomeComposerCapsule(
-            onNewClick = { showNewMessageSheet = true },
-            onMicClick = { onOpenConversation(MeshStore.BROADCAST_CONVERSATION_KEY) },
-            onSendClick = {
-                val target = dmRows.firstOrNull()?.conversationKey ?: MeshStore.BROADCAST_CONVERSATION_KEY
-                onOpenConversation(target)
-            },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 14.dp),
-        )
-    }
-
-    // "Add note" modal dialog
-    if (showAddNoteDialog) {
-        AlertDialog(
-            onDismissRequest = { showAddNoteDialog = false },
-            containerColor = palette.surface1,
-            titleContentColor = palette.textPrimary,
-            textContentColor = palette.textSecondary,
-            title = {
-                Text(
-                    text = "Share a Status Note",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "Your note floats above your avatar and is broadcast to nearby people.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.textSecondary,
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(palette.canvas)
-                            .border(1.dp, palette.accent.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                    ) {
-                        if (draftStatusNote.isEmpty()) {
-                            Text(
-                                text = "What's on your mind?",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = palette.textMuted,
-                            )
-                        }
-                        BasicTextField(
-                            value = draftStatusNote,
-                            onValueChange = { draftStatusNote = it.take(36) },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                color = palette.textPrimary,
-                            ),
-                            cursorBrush = SolidColor(palette.accentSecondary),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val clean = draftStatusNote.trim()
-                        if (clean.isNotEmpty()) {
-                            userStatusNote = clean
-                            onPublishNote(clean)
-                        } else {
-                            userStatusNote = "Add note"
-                        }
-                        showAddNoteDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = palette.accent,
-                        contentColor = Color.White,
-                    ),
-                ) {
-                    Text("Share Note")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddNoteDialog = false }) {
-                    Text("Cancel", color = palette.textSecondary)
-                }
-            },
-        )
-    }
-
-    // "+ New" Bottom Sheet (Quick Message / Lounge / Broadcast)
-    if (showNewMessageSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showNewMessageSheet = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            containerColor = palette.surface1,
-            contentColor = palette.textPrimary,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 28.dp),
-            ) {
-                Text(
-                    text = "New Conversation",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = palette.textPrimary,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                )
-                ListItem(
-                    headlineContent = { Text("Public Lounge", fontWeight = FontWeight.SemiBold) },
-                    supportingContent = { Text("Message everyone nearby") },
-                    leadingContent = {
-                        PeerAvatar(
-                            nickname = "Public Lounge",
-                            peerIdHex = "lounge",
-                            size = 44.dp,
-                            isBroadcastChannel = true,
-                            isOnline = isMeshRunning,
-                        )
-                    },
-                    colors = ListItemDefaults.colors(containerColor = palette.surface1),
-                    modifier = Modifier.clickable {
-                        showNewMessageSheet = false
-                        onOpenConversation(MeshStore.BROADCAST_CONVERSATION_KEY)
-                    },
-                )
-                ListItem(
-                    headlineContent = { Text("Live Lounge Grid", fontWeight = FontWeight.SemiBold) },
-                    supportingContent = { Text("Explore nearby people & send quick emoji waves") },
-                    leadingContent = {
-                        FrostedCircleIconButton(
-                            icon = Icons.Filled.GraphicEq,
-                            contentDescription = null,
-                            onClick = {
-                                showNewMessageSheet = false
-                                onOpenLounge()
-                            },
-                            size = 44.dp,
-                        )
-                    },
-                    colors = ListItemDefaults.colors(containerColor = palette.surface1),
-                    modifier = Modifier.clickable {
-                        showNewMessageSheet = false
-                        onOpenLounge()
-                    },
-                )
-                peers.filter { !it.isBlocked }.forEach { peer ->
-                    ListItem(
-                        headlineContent = { Text(peer.nickname, fontWeight = FontWeight.SemiBold) },
-                        supportingContent = {
-                            Text(if (peer.isDirectlyConnected) "Online nearby" else "Recent contact")
-                        },
-                        leadingContent = {
-                            PeerAvatar(
-                                nickname = peer.nickname,
-                                peerIdHex = peer.peerIdHex,
-                                size = 44.dp,
-                                isOnline = peer.isDirectlyConnected,
-                                isVerified = peer.isVerified,
-                            )
-                        },
-                        colors = ListItemDefaults.colors(containerColor = palette.surface1),
-                        modifier = Modifier.clickable {
-                            showNewMessageSheet = false
-                            onOpenConversation(peer.peerIdHex)
-                        },
-                    )
-                }
-            }
-        }
-    }
-
-    // Long-press Conversation Context Sheet
-    val target = contextMenuTarget
-    if (target != null) {
-        val isBroadcast = target.conversationKey == MeshStore.BROADCAST_CONVERSATION_KEY
-        ModalBottomSheet(
-            onDismissRequest = { contextMenuTarget = null },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            containerColor = palette.surface1,
-            contentColor = palette.textPrimary,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    PeerAvatar(
-                        nickname = target.displayName,
-                        peerIdHex = target.conversationKey,
-                        size = 44.dp,
-                        isBroadcastChannel = isBroadcast,
-                        isOnline = target.peer?.isDirectlyConnected == true,
-                        isVerified = target.peer?.isVerified == true,
-                    )
-                    Column {
-                        Text(
-                            text = target.displayName,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = palette.textPrimary,
-                        )
-                        Text(
-                            text = if (isBroadcast) "Public Lounge" else "Encrypted Direct Chat",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = palette.textSecondary,
-                        )
-                    }
-                }
-
-                ListItem(
-                    headlineContent = {
-                        Text(if (target.isPinned) "Unpin conversation" else "Pin to top")
-                    },
-                    leadingContent = {
-                        Icon(
-                            imageVector = if (target.isPinned) Icons.Outlined.PushPin else Icons.Filled.PushPin,
-                            contentDescription = null,
-                            tint = palette.accentSecondary,
-                        )
-                    },
-                    colors = ListItemDefaults.colors(containerColor = palette.surface1),
-                    modifier = Modifier.clickable {
-                        onTogglePin(target.conversationKey)
-                        contextMenuTarget = null
-                    },
-                )
-
-                ListItem(
-                    headlineContent = {
-                        Text(if (target.isMuted) "Unmute notifications" else "Mute notifications")
-                    },
-                    leadingContent = {
-                        Icon(
-                            imageVector = if (target.isMuted) {
-                                Icons.Filled.NotificationsOff
-                            } else {
-                                Icons.Filled.NotificationsPaused
-                            },
-                            contentDescription = null,
-                            tint = palette.warningAmber,
-                        )
-                    },
-                    colors = ListItemDefaults.colors(containerColor = palette.surface1),
-                    modifier = Modifier.clickable {
-                        onToggleMute(target.conversationKey)
-                        contextMenuTarget = null
-                    },
-                )
-
-                ListItem(
-                    headlineContent = {
-                        Text(if (target.unreadCount > 0) "Mark as read" else "Mark as unread")
-                    },
-                    leadingContent = {
-                        Icon(
-                            imageVector = if (target.unreadCount > 0) {
-                                Icons.Filled.MarkChatRead
-                            } else {
-                                Icons.Filled.MarkChatUnread
-                            },
-                            contentDescription = null,
-                            tint = palette.textSecondary,
-                        )
-                    },
-                    colors = ListItemDefaults.colors(containerColor = palette.surface1),
-                    modifier = Modifier.clickable {
-                        onToggleUnread(target.conversationKey)
-                        contextMenuTarget = null
-                    },
-                )
-
-                if (!isBroadcast && target.peer != null) {
-                    ListItem(
-                        headlineContent = { Text("Verify safety number") },
-                        leadingContent = {
-                            Icon(
-                                imageVector = Icons.Filled.VerifiedUser,
-                                contentDescription = null,
-                                tint = palette.encryptedGreen,
-                            )
-                        },
-                        colors = ListItemDefaults.colors(containerColor = palette.surface1),
-                        modifier = Modifier.clickable {
-                            val peer = target.peer
-                            contextMenuTarget = null
-                            onVerifyPeer(peer)
-                        },
-                    )
-                }
-
-                if (!isBroadcast) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 6.dp),
-                        color = palette.borderSubtle,
-                    )
-                    ListItem(
-                        headlineContent = {
-                            Text("Delete conversation", color = palette.dangerRed)
-                        },
-                        leadingContent = {
-                            Icon(
-                                imageVector = Icons.Filled.DeleteOutline,
-                                contentDescription = null,
-                                tint = palette.dangerRed,
-                            )
-                        },
-                        colors = ListItemDefaults.colors(containerColor = palette.surface1),
-                        modifier = Modifier.clickable {
-                            val key = target.conversationKey
-                            contextMenuTarget = null
-                            onDeleteConversation(key)
-                        },
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * The signature 5-Avatar Curved Constellation Arc + floating "Add note" speech bubble
- * and bottom "+" badge from Screen 1 of the reference image.
- */
-@Composable
-private fun CurvedAvatarConstellationArc(
-    myNickname: String,
-    myPeerIdHex: String,
-    statusNote: String,
-    peers: List<PeerUiModel>,
-    onAddNoteClick: () -> Unit,
-    onPeerClick: (PeerUiModel) -> Unit,
-    onFallbackOrbitClick: () -> Unit,
-) {
-    val palette = LocalCypherPalette.current
-    val floatTransition = rememberInfiniteTransition(label = "note_float")
-    val noteFloatOffset by floatTransition.animateFloat(
-        initialValue = -2f,
-        targetValue = 2f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "note_y",
-    )
-
-    // Pick up to 4 peers for the 4 flanking orbit positions; fill remaining slots with ambient seeds
-    val slot0 = peers.getOrNull(0)
-    val slot1 = peers.getOrNull(1)
-    val slot2 = peers.getOrNull(2)
-    val slot3 = peers.getOrNull(3)
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        // Floating "Add note" gradient speech bubble with downward pointer triangle
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .offset(y = noteFloatOffset.dp)
-                .clickable(onClick = onAddNoteClick)
-                .testTag("add_note_bubble_button"),
-        ) {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(palette.primaryPillBrush)
-                    .padding(horizontal = 16.dp, vertical = 7.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = statusNote,
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.5.sp,
-                    ),
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            // Speech-bubble triangle pointer
-            Canvas(modifier = Modifier.size(width = 12.dp, height = 6.dp)) {
-                val path = Path().apply {
-                    moveTo(0f, 0f)
-                    lineTo(size.width, 0f)
-                    lineTo(size.width / 2f, size.height)
-                    close()
-                }
-                drawPath(path = path, color = Color(0xFF4A88FF))
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        // 5-Avatar Curved Constellation Row
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Far-Left Orbit Avatar (highest on the arc)
-            Box(
-                modifier = Modifier
-                    .offset(y = (-28).dp)
-                    .clip(CircleShape)
-                    .clickable {
-                        if (slot0 != null) onPeerClick(slot0) else onFallbackOrbitClick()
-                    },
-            ) {
-                PeerAvatar(
-                    nickname = slot0?.nickname ?: "Jenny",
-                    peerIdHex = slot0?.peerIdHex ?: "orbit_slot_0",
-                    size = 44.dp,
-                    isOnline = slot0?.isDirectlyConnected == true,
-                )
-            }
-
-            // Inner-Left Orbit Avatar (mid-arc)
-            Box(
-                modifier = Modifier
-                    .offset(y = (-8).dp)
-                    .clip(CircleShape)
-                    .clickable {
-                        if (slot1 != null) onPeerClick(slot1) else onFallbackOrbitClick()
-                    },
-            ) {
-                PeerAvatar(
-                    nickname = slot1?.nickname ?: "Guy",
-                    peerIdHex = slot1?.peerIdHex ?: "orbit_slot_1",
-                    size = 50.dp,
-                    isOnline = slot1?.isDirectlyConnected == true,
-                )
-            }
-
-            // Center Hero Avatar with glowing ring + bottom "+" button
-            Box(
-                contentAlignment = Alignment.BottomCenter,
-                modifier = Modifier
-                    .padding(bottom = 4.dp)
-                    .clickable(onClick = onAddNoteClick),
-            ) {
-                PeerAvatar(
-                    nickname = myNickname,
-                    peerIdHex = myPeerIdHex.ifBlank { "self_hero_portrait" },
-                    size = 84.dp,
-                    hasGlowRing = true,
-                )
-                Box(
-                    modifier = Modifier
-                        .offset(y = 10.dp)
-                        .size(26.dp)
-                        .clip(CircleShape)
-                        .background(Color.White)
-                        .border(2.5.dp, palette.canvas, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Add,
-                        contentDescription = "Add status note",
-                        tint = Color(0xFF0A0F1D),
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-
-            // Inner-Right Orbit Avatar (mid-arc)
-            Box(
-                modifier = Modifier
-                    .offset(y = (-8).dp)
-                    .clip(CircleShape)
-                    .clickable {
-                        if (slot2 != null) onPeerClick(slot2) else onFallbackOrbitClick()
-                    },
-            ) {
-                PeerAvatar(
-                    nickname = slot2?.nickname ?: "Daniel",
-                    peerIdHex = slot2?.peerIdHex ?: "orbit_slot_2",
-                    size = 50.dp,
-                    isOnline = slot2?.isDirectlyConnected == true,
-                )
-            }
-
-            // Far-Right Orbit Avatar (highest on the arc)
-            Box(
-                modifier = Modifier
-                    .offset(y = (-28).dp)
-                    .clip(CircleShape)
-                    .clickable {
-                        if (slot3 != null) onPeerClick(slot3) else onFallbackOrbitClick()
-                    },
-            ) {
-                PeerAvatar(
-                    nickname = slot3?.nickname ?: "Kristin",
-                    peerIdHex = slot3?.peerIdHex ?: "orbit_slot_3",
-                    size = 44.dp,
-                    isOnline = slot3?.isDirectlyConnected == true,
-                )
-            }
-        }
-    }
-}
-
-/**
- * 3-Segment Frosted Pill Bar ("Inbox 26" · "Unread" · "Requests") matching Screen 1.
- */
-@Composable
-private fun SegmentedInboxPillBar(
-    selectedFilter: ChatFilter,
-    inboxCount: Int,
-    unreadCount: Int,
-    requestsCount: Int,
-    onSelectFilter: (ChatFilter) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val palette = LocalCypherPalette.current
-
-    Surface(
-        color = Color(0xFF111827),
-        shape = RoundedCornerShape(30.dp),
-        modifier = modifier
-            .fillMaxWidth()
-            .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(30.dp)),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(5.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ChatFilter.entries.forEach { filter ->
-                val selected = selectedFilter == filter
-                val labelText = when (filter) {
-                    ChatFilter.INBOX -> "Inbox $inboxCount"
-                    ChatFilter.UNREAD -> if (unreadCount > 0) "Unread $unreadCount" else "Unread"
-                    ChatFilter.REQUESTS -> if (requestsCount > 0) "Requests $requestsCount" else "Requests"
-                }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(40.dp)
-                        .clip(RoundedCornerShape(24.dp))
-                        .then(
-                            if (selected) {
-                                Modifier.background(palette.primaryPillBrush)
-                            } else {
-                                Modifier.background(Color.Transparent)
-                            },
-                        )
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { onSelectFilter(filter) },
-                        )
-                        .testTag("filter_chip_${filter.name.lowercase()}"),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = labelText,
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontSize = 13.5.sp,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        ),
-                        color = if (selected) Color.White else Color(0xFF7D89A3),
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * Clean, spacious conversation row matching Screen 1:
- * Left 52.dp portrait avatar · Bold Name + 1-line preview · Timestamp + Right circular Bell button.
- */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun LuxuryConversationItemRow(
-    row: ConversationRowSummary,
-    isBroadcast: Boolean,
-    onlineCount: Int,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    onSwipePin: () -> Unit,
-    onSwipeMute: () -> Unit,
-) {
-    val palette = LocalCypherPalette.current
-    val scope = rememberCoroutineScope()
-    val density = LocalDensity.current
-    val offsetX = remember { Animatable(0f) }
-    val swipeThresholdPx = with(density) { 78.dp.toPx() }
-
-    val previewText = when {
-        !row.draftText.isNullOrBlank() -> "Draft: ${row.draftText}"
-        row.lastMessage != null -> {
-            val msg = row.lastMessage
-            val body = when (msg.attachment?.kind) {
-                AttachmentKind.IMAGE -> "Sent a photo"
-                AttachmentKind.AUDIO -> "Voice message"
-                AttachmentKind.FILE -> msg.attachment.fileName
-                null -> msg.text
-            }
-            if (isBroadcast && !msg.isOutgoing && !msg.isSystem) {
-                "${msg.senderNickname}: $body"
-            } else {
-                body
-            }
-        }
-        isBroadcast -> if (onlineCount > 0) {
-            "$onlineCount people nearby · Tap to say hi"
-        } else {
-            "Tap to share a message with everyone nearby"
-        }
-        row.peer?.isDirectlyConnected == true -> "Online nearby · Say hello 👋"
-        else -> "Start an encrypted conversation"
-    }
-
-    val timestampLabel = row.lastMessage?.timestampMs?.let { formatInboxTimestamp(it) }
-        ?: if (isBroadcast || row.peer?.isDirectlyConnected == true) "Now" else ""
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 2.dp),
-    ) {
-        // Underlying swipe action reveal
-        if (abs(offsetX.value) > 6f) {
-            val isPinning = offsetX.value > 0f
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(
-                        if (isPinning) palette.accent.copy(alpha = 0.22f) else palette.warningAmberSoft,
-                    )
-                    .padding(horizontal = 20.dp),
-                contentAlignment = if (isPinning) Alignment.CenterStart else Alignment.CenterEnd,
-            ) {
-                Icon(
-                    imageVector = if (isPinning) Icons.Filled.PushPin else Icons.Filled.NotificationsOff,
-                    contentDescription = null,
-                    tint = if (isPinning) palette.accentSecondary else palette.warningAmber,
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier
-                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(palette.canvas)
-                .pointerInput(row.conversationKey) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            val current = offsetX.value
-                            if (current >= swipeThresholdPx) {
-                                onSwipePin()
-                            } else if (current <= -swipeThresholdPx) {
-                                onSwipeMute()
-                            }
-                            scope.launch {
-                                offsetX.animateTo(
-                                    targetValue = 0f,
-                                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-                                )
-                            }
-                        },
-                        onDragCancel = {
-                            scope.launch { offsetX.animateTo(0f) }
-                        },
-                        onHorizontalDrag = { _, dragAmount ->
-                            scope.launch {
-                                val next = (offsetX.value + dragAmount * 0.65f)
-                                    .coerceIn(-swipeThresholdPx * 1.25f, swipeThresholdPx * 1.25f)
-                                offsetX.snapTo(next)
-                            }
-                        },
-                    )
-                }
-                .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = onLongClick,
-                )
-                .padding(horizontal = 8.dp, vertical = 11.dp)
-                .testTag(
-                    if (isBroadcast) {
-                        "mesh_broadcast_row"
-                    } else {
-                        "conversation_row_${row.conversationKey}"
-                    },
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            PeerAvatar(
-                nickname = row.displayName,
-                peerIdHex = row.conversationKey,
-                size = 52.dp,
-                isBroadcastChannel = isBroadcast,
-                isOnline = if (isBroadcast) onlineCount > 0 else (row.peer?.isDirectlyConnected == true),
-                isVerified = row.peer?.isVerified == true,
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Top App Bar: Cipher Chain Logo (triple-tap -> Panic Mode) + "Cipher" + Search + 3-dot Menu
+            CipherTopBar(
+                searchActive = searchActive,
+                searchQuery = searchQuery,
+                onSearchQueryChange = { searchQuery = it },
+                onToggleSearch = {
+                    searchActive = !searchActive
+                    if (!searchActive) searchQuery = ""
+                },
+                showOverflowMenu = showOverflowMenu,
+                onToggleOverflowMenu = { showOverflowMenu = it },
+                onOpenMeshNetwork = onOpenMeshNetwork,
+                onOpenSecurityVerification = { onOpenSecurityVerification(MeshStore.RICK_PEER_KEY) },
+                onOpenSettings = onOpenSettings,
+                onOpenPanicMode = onOpenPanicMode,
             )
 
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        text = row.displayName,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        ),
-                        color = palette.textPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (row.isPinned) {
-                        Icon(
-                            imageVector = Icons.Filled.PushPin,
-                            contentDescription = "Pinned",
-                            tint = palette.accentSecondary,
-                            modifier = Modifier.size(13.dp),
-                        )
+            // 3-way Segmented Pill Bar: Chats | Channels | People
+            SegmentedHomePillBar(
+                selectedSegment = selectedSegment,
+                onSelectSegment = onSelectSegment,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+
+            when (selectedSegment) {
+                CipherHomeSegment.CHATS -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("conversations_list"),
+                        contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp),
+                    ) {
+                        itemsIndexed(
+                            items = conversationRows,
+                            key = { _, item -> item.conversationKey },
+                        ) { index, item ->
+                            Box {
+                                ConversationListRow(
+                                    item = item,
+                                    onClick = { onOpenConversation(item.conversationKey) },
+                                    onLongClick = { contextMenuTargetKey = item.conversationKey },
+                                )
+                                DropdownMenu(
+                                    expanded = contextMenuTargetKey == item.conversationKey,
+                                    onDismissRequest = { contextMenuTargetKey = null },
+                                    containerColor = Color(0xFF1C1F30),
+                                ) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (item.isPinned) "Unpin conversation" else "Pin conversation",
+                                                color = Color.White,
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Outlined.PushPin,
+                                                contentDescription = null,
+                                                tint = Color(0xFFA78BFA),
+                                            )
+                                        },
+                                        onClick = {
+                                            controller.togglePinConversation(item.conversationKey)
+                                            contextMenuTargetKey = null
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (item.isMuted) "Unmute notifications" else "Mute notifications",
+                                                color = Color.White,
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Outlined.NotificationsOff,
+                                                contentDescription = null,
+                                                tint = Color(0xFF9CA3AF),
+                                            )
+                                        },
+                                        onClick = {
+                                            controller.toggleMuteConversation(item.conversationKey)
+                                            contextMenuTargetKey = null
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text("Delete conversation", color = Color(0xFFF87171))
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Outlined.DeleteOutline,
+                                                contentDescription = null,
+                                                tint = Color(0xFFF87171),
+                                            )
+                                        },
+                                        onClick = {
+                                            val backup = controller.deleteConversationWithBackup(item.conversationKey)
+                                            if (backup != null) {
+                                                onConversationDeleted(backup)
+                                            }
+                                            contextMenuTargetKey = null
+                                        },
+                                    )
+                                }
+                            }
+                            if (index < conversationRows.lastIndex) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(start = 78.dp, end = 16.dp),
+                                    thickness = 0.7.dp,
+                                    color = Color(0xFF1E2133),
+                                )
+                            }
+                        }
                     }
                 }
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                ) {
-                    if (row.lastMessage?.isOutgoing == true && row.draftText.isNullOrBlank()) {
-                        DeliveryReceiptIcon(state = row.lastMessage.delivery)
-                    }
-                    Text(
-                        text = previewText,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = 13.5.sp,
-                            fontWeight = if (row.unreadCount > 0) FontWeight.SemiBold else FontWeight.Normal,
-                        ),
-                        color = when {
-                            !row.draftText.isNullOrBlank() -> palette.accentSecondary
-                            row.unreadCount > 0 -> palette.textPrimary
-                            else -> Color(0xFF8A96B0)
+                CipherHomeSegment.CHANNELS -> {
+                    LocationChannelsScreenContent(
+                        bookmarkedChannels = bookmarkedChannels,
+                        joinedChannels = joinedChannels,
+                        onJoinChannel = { rawTag ->
+                            val normalized = controller.joinChannel(rawTag)
+                            onOpenConversation(normalized)
                         },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        onToggleBookmark = { tag ->
+                            controller.toggleBookmarkChannel(tag)
+                        },
+                        onOpenChannel = { tag ->
+                            val normalized = controller.joinChannel(tag)
+                            onOpenConversation(normalized)
+                        },
+                    )
+                }
+
+                CipherHomeSegment.PEOPLE -> {
+                    ContactsTab(
+                        controller = controller,
+                        onOpenConversation = onOpenConversation,
+                        onOpenVerification = onOpenSecurityVerification,
+                        onOpenSettings = onOpenSettings,
+                        embeddedInHome = true,
                     )
                 }
             }
+        }
 
-            // Right side: Timestamp + Circular notification bell / unread badge
+        // Floating Action Button on Chats tab (purple circle with white pencil icon)
+        AnimatedVisibility(
+            visible = selectedSegment == CipherHomeSegment.CHATS,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 20.dp, bottom = 22.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .shadow(
+                        elevation = 14.dp,
+                        shape = CircleShape,
+                        ambientColor = Color(0xFF7C4DFF),
+                        spotColor = Color(0xFF7C4DFF),
+                    )
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(Color(0xFF8B5CF6), Color(0xFF6938EF)),
+                        )
+                    )
+                    .clickable { showComposeSheet = true }
+                    .testTag("new_chat_fab"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Edit,
+                    contentDescription = "New Message",
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+    }
+
+    if (showComposeSheet) {
+        NewMessageBottomSheet(
+            controller = controller,
+            onDismiss = { showComposeSheet = false },
+            onOpenConversation = { key ->
+                showComposeSheet = false
+                onOpenConversation(key)
+            },
+            onSwitchToChannels = {
+                showComposeSheet = false
+                onSelectSegment(CipherHomeSegment.CHANNELS)
+            },
+        )
+    }
+}
+
+@Composable
+private fun CipherTopBar(
+    searchActive: Boolean,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    onToggleSearch: () -> Unit,
+    showOverflowMenu: Boolean,
+    onToggleOverflowMenu: (Boolean) -> Unit,
+    onOpenMeshNetwork: () -> Unit,
+    onOpenSecurityVerification: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenPanicMode: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        if (!searchActive) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (timestampLabel.isNotEmpty()) {
+                CipherChainLogo(
+                    size = 28.dp,
+                    onTripleTap = onOpenPanicMode,
+                    modifier = Modifier.testTag("cipher_top_logo"),
+                )
+                Text(
+                    text = "Cipher",
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.3).sp,
+                )
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFF181A28))
+                    .border(1.dp, Color(0xFF2B2E44), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (searchQuery.isEmpty()) {
                     Text(
-                        text = timestampLabel,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                        ),
-                        color = Color(0xFF6D7993),
+                        text = "Search chats, channels, or peers...",
+                        color = Color(0xFF787E99),
+                        fontSize = 14.sp,
+                    )
+                }
+                BasicTextField(
+                    value = searchQuery,
+                    onValueChange = onSearchQueryChange,
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 14.sp,
+                    ),
+                    cursorBrush = SolidColor(Color(0xFF8B5CF6)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("chats_search_input"),
+                )
+            }
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = onToggleSearch,
+                modifier = Modifier
+                    .size(40.dp)
+                    .testTag("chats_search_button"),
+            ) {
+                Icon(
+                    imageVector = if (searchActive) Icons.Filled.Close else Icons.Filled.Search,
+                    contentDescription = if (searchActive) "Close search" else "Search",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+
+            Box {
+                IconButton(
+                    onClick = { onToggleOverflowMenu(true) },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("chats_overflow_button"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "More options",
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp),
                     )
                 }
 
-                if (row.unreadCount > 0) {
-                    UnreadCountBadge(
-                        count = row.unreadCount,
-                        isMuted = row.isMuted,
+                DropdownMenu(
+                    expanded = showOverflowMenu,
+                    onDismissRequest = { onToggleOverflowMenu(false) },
+                    containerColor = Color(0xFF1A1D2E),
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Mesh Network", color = Color.White) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.Hub,
+                                contentDescription = null,
+                                tint = Color(0xFFA78BFA),
+                            )
+                        },
+                        onClick = {
+                            onToggleOverflowMenu(false)
+                            onOpenMeshNetwork()
+                        },
                     )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF141C2E))
-                            .border(1.dp, Color.White.copy(alpha = 0.06f), CircleShape)
-                            .clickable { onSwipeMute() },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = if (row.isMuted) {
-                                Icons.Filled.NotificationsOff
-                            } else {
-                                Icons.Filled.NotificationsNone
-                            },
-                            contentDescription = if (row.isMuted) "Muted" else "Notifications active",
-                            tint = if (row.isMuted) Color(0xFF64748B) else Color(0xFF94A3B8),
-                            modifier = Modifier.size(16.dp),
+                    DropdownMenuItem(
+                        text = { Text("Security Verification", color = Color.White) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.VerifiedUser,
+                                contentDescription = null,
+                                tint = Color(0xFF4ADE80),
+                            )
+                        },
+                        onClick = {
+                            onToggleOverflowMenu(false)
+                            onOpenSecurityVerification()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Settings", color = Color.White) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.Settings,
+                                contentDescription = null,
+                                tint = Color(0xFFC4B5FD),
+                            )
+                        },
+                        onClick = {
+                            onToggleOverflowMenu(false)
+                            onOpenSettings()
+                        },
+                    )
+                    HorizontalDivider(color = Color(0xFF282C42))
+                    DropdownMenuItem(
+                        text = { Text("Panic Mode", color = Color(0xFFF87171)) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.WarningAmber,
+                                contentDescription = null,
+                                tint = Color(0xFFF87171),
+                            )
+                        },
+                        onClick = {
+                            onToggleOverflowMenu(false)
+                            onOpenPanicMode()
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SegmentedHomePillBar(
+    selectedSegment: CipherHomeSegment,
+    onSelectSegment: (CipherHomeSegment) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(42.dp)
+            .clip(RoundedCornerShape(21.dp))
+            .background(Color(0xFF171928))
+            .border(1.dp, Color(0xFF25283D), RoundedCornerShape(21.dp))
+            .padding(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CipherHomeSegment.entries.forEach { segment ->
+            val isSelected = segment == selectedSegment
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(18.dp))
+                    .then(
+                        if (isSelected) {
+                            Modifier.background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(Color(0xFF8352FD), Color(0xFF6938EF)),
+                                )
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .clickable { onSelectSegment(segment) }
+                    .testTag("segment_${segment.name.lowercase()}"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = segment.label,
+                    color = if (isSelected) Color.White else Color(0xFF9CA3AF),
+                    fontSize = 14.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ConversationListRow(
+    item: ConversationRowItem,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
+            .padding(horizontal = 16.dp, vertical = 12.5.dp)
+            .testTag("conversation_row_${item.conversationKey}"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PeerAvatar(
+            nickname = item.title,
+            peerIdHex = item.conversationKey,
+            conversationKey = item.conversationKey,
+            size = 48.dp,
+        )
+
+        Spacer(modifier = Modifier.width(14.dp))
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = item.title,
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = item.timestampLabel,
+                    color = Color(0xFF8E93AD),
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Normal,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = item.subtitle,
+                    color = Color(0xFF9CA3AF),
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (item.unreadCount > 0) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    UnreadCountBadge(count = item.unreadCount)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Screen 5: Location Channels / Mesh Channels view matching the reference image pixel-by-pixel.
+ */
+@Composable
+fun LocationChannelsScreenContent(
+    bookmarkedChannels: Set<String>,
+    joinedChannels: Set<String>,
+    onJoinChannel: (String) -> Unit,
+    onToggleBookmark: (String) -> Unit,
+    onOpenChannel: (String) -> Unit,
+) {
+    var channelInput by rememberSaveable { mutableStateOf("") }
+
+    val bookmarkedEntries = remember(bookmarkedChannels) {
+        val defaults = listOf(
+            ChannelDirectoryEntry("#9q_k6", "#9q_k6", "~ 3 mi • CA and AZ"),
+            ChannelDirectoryEntry("#city-3", "City #3", "~ 3 mi • Athens"),
+        )
+        val extra = bookmarkedChannels
+            .filter { tag -> defaults.none { it.channelKey.equals(tag, ignoreCase = true) } }
+            .map { tag ->
+                ChannelDirectoryEntry(
+                    channelKey = tag,
+                    displayTitle = formatChannelDisplayName(tag),
+                    subtitle = "Bluetooth mesh • Bookmarked",
+                )
+            }
+        defaults + extra
+    }
+
+    val nearbyEntries = remember(joinedChannels) {
+        val defaults = listOf(
+            ChannelDirectoryEntry("#mesh-2", "Mesh #2", "Bluetooth • 30–160 ft"),
+            ChannelDirectoryEntry("#block-10", "Block #10", "~ 0.1 mi • Athens"),
+            ChannelDirectoryEntry("#neighborhood-0", "Neighborhood #0", "~ 0.8 mi • Athens"),
+            ChannelDirectoryEntry("#city-3", "City #3", "~ 3 mi • Athens"),
+        )
+        val customJoined = joinedChannels
+            .filter { tag ->
+                tag !in HOME_CONVERSATION_ORDER &&
+                    defaults.none { it.channelKey.equals(tag, ignoreCase = true) } &&
+                    !tag.equals("#9q_k6", ignoreCase = true)
+            }
+            .map { tag ->
+                ChannelDirectoryEntry(
+                    channelKey = tag,
+                    displayTitle = formatChannelDisplayName(tag),
+                    subtitle = "Bluetooth • Active channel",
+                )
+            }
+        defaults + customJoined
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp)
+            .testTag("location_channels_list"),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 36.dp),
+    ) {
+        item {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.LocationOn,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+                Text(
+                    text = "Location Channels",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "Chat with people near you using geohash channels. Only a coarse location is shared.",
+                color = Color(0xFF8E93AD),
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // "# Enter geohash" + "Join" button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF171928))
+                        .border(1.dp, Color(0xFF26293E), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "#",
+                        color = Color(0xFF8E93AD),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(modifier = Modifier.weight(1f)) {
+                        if (channelInput.isEmpty()) {
+                            Text(
+                                text = "Enter geohash",
+                                color = Color(0xFF6E738F),
+                                fontSize = 14.sp,
+                            )
+                        }
+                        BasicTextField(
+                            value = channelInput,
+                            onValueChange = { channelInput = it },
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                color = Color.White,
+                                fontSize = 14.sp,
+                            ),
+                            cursorBrush = SolidColor(Color(0xFF8B5CF6)),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(
+                                onDone = {
+                                    if (channelInput.isNotBlank()) {
+                                        val target = channelInput.trim()
+                                        channelInput = ""
+                                        onJoinChannel(target)
+                                    }
+                                },
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("channel_geohash_input"),
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(Color(0xFF8352FD), Color(0xFF6938EF)),
+                            )
+                        )
+                        .clickable {
+                            val target = channelInput.trim().ifEmpty { "#9q_k6" }
+                            channelInput = ""
+                            onJoinChannel(target)
+                        }
+                        .padding(horizontal = 20.dp)
+                        .testTag("channel_join_button"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Join",
+                        color = Color.White,
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "BOOKMARKED",
+                color = Color(0xFF8E93AD),
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp,
+                modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFF171928))
+                    .border(1.dp, Color(0xFF25283D), RoundedCornerShape(20.dp)),
+            ) {
+                bookmarkedEntries.forEachIndexed { index, entry ->
+                    ChannelDirectoryRow(
+                        entry = entry,
+                        isBookmarkedSection = true,
+                        isBookmarked = bookmarkedChannels.contains(entry.channelKey) || index < 2,
+                        onRowClick = { onOpenChannel(entry.channelKey) },
+                        onActionClick = { onToggleBookmark(entry.channelKey) },
+                    )
+                    if (index < bookmarkedEntries.lastIndex) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 56.dp, end = 16.dp),
+                            thickness = 0.7.dp,
+                            color = Color(0xFF23263A),
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "NEARBY CHANNELS",
+                color = Color(0xFF8E93AD),
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp,
+                modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFF171928))
+                    .border(1.dp, Color(0xFF25283D), RoundedCornerShape(20.dp)),
+            ) {
+                nearbyEntries.forEachIndexed { index, entry ->
+                    ChannelDirectoryRow(
+                        entry = entry,
+                        isBookmarkedSection = false,
+                        isBookmarked = bookmarkedChannels.contains(entry.channelKey),
+                        onRowClick = { onOpenChannel(entry.channelKey) },
+                        onActionClick = { onJoinChannel(entry.channelKey) },
+                    )
+                    if (index < nearbyEntries.lastIndex) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 56.dp, end = 16.dp),
+                            thickness = 0.7.dp,
+                            color = Color(0xFF23263A),
                         )
                     }
                 }
@@ -1393,112 +954,344 @@ private fun LuxuryConversationItemRow(
     }
 }
 
-/**
- * Floating bottom capsule ("+ New" · Mic · Send) matching the bottom of Screen 1 in the reference image.
- */
 @Composable
-private fun FloatingHomeComposerCapsule(
-    onNewClick: () -> Unit,
-    onMicClick: () -> Unit,
-    onSendClick: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun ChannelDirectoryRow(
+    entry: ChannelDirectoryEntry,
+    isBookmarkedSection: Boolean,
+    isBookmarked: Boolean,
+    onRowClick: () -> Unit,
+    onActionClick: () -> Unit,
 ) {
-    Surface(
-        color = Color(0xFF121826),
-        shape = RoundedCornerShape(36.dp),
-        shadowElevation = 14.dp,
-        modifier = modifier
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(36.dp)),
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onRowClick)
+            .padding(horizontal = 16.dp, vertical = 13.dp)
+            .testTag("channel_row_${entry.channelKey}"),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        Icon(
+            imageVector = Icons.Outlined.Group,
+            contentDescription = null,
+            tint = Color(0xFFD0D5DD),
+            modifier = Modifier.size(22.dp),
+        )
+
+        Spacer(modifier = Modifier.width(16.dp))
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            // "+ New" pill button
-            Row(
+            Text(
+                text = entry.displayTitle,
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = entry.subtitle,
+                color = Color(0xFF8E93AD),
+                fontSize = 12.5.sp,
+            )
+        }
+
+        if (isBookmarkedSection) {
+            IconButton(
+                onClick = onActionClick,
+                modifier = Modifier.size(34.dp),
+            ) {
+                Icon(
+                    imageVector = if (isBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                    contentDescription = "Bookmark channel",
+                    tint = Color(0xFF8B5CF6),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        } else {
+            Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(24.dp))
-                    .clickable(onClick = onNewClick)
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-                    .testTag("home_new_message_button"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF261E46))
+                    .border(1.dp, Color(0xFF3E306E), CircleShape)
+                    .clickable(onClick = onActionClick),
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Filled.Add,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(
-                    text = "New",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.5.sp,
-                    ),
-                    color = Color.White,
-                )
-            }
-
-            // Circular Mic button
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF1B2438))
-                    .clickable(onClick = onMicClick)
-                    .testTag("home_mic_button"),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Mic,
-                    contentDescription = "Voice note",
-                    tint = Color(0xFFB8C4DC),
-                    modifier = Modifier.size(19.dp),
-                )
-            }
-
-            // Circular Paper-Plane Send button
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF1B2438))
-                    .clickable(onClick = onSendClick)
-                    .testTag("home_send_button"),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Open chat",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
+                    contentDescription = "Join ${entry.displayTitle}",
+                    tint = Color(0xFFB69DF8),
+                    modifier = Modifier.size(17.dp),
                 )
             }
         }
     }
 }
 
-private fun formatInboxTimestamp(timestampMs: Long): String {
-    if (timestampMs <= 0L) return ""
-    val now = System.currentTimeMillis()
-    val diffMs = now - timestampMs
-    if (diffMs < 60_000L) return "Just now"
-    if (diffMs < 3_600_000L) return "${(diffMs / 60_000L).coerceAtLeast(1)}mins ago"
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NewMessageBottomSheet(
+    controller: MeshController,
+    onDismiss: () -> Unit,
+    onOpenConversation: (String) -> Unit,
+    onSwitchToChannels: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var customTarget by remember { mutableStateOf("") }
 
-    val calNow = Calendar.getInstance()
-    val calMsg = Calendar.getInstance().apply { timeInMillis = timestampMs }
-    val sameDay = calNow.get(Calendar.YEAR) == calMsg.get(Calendar.YEAR) &&
-        calNow.get(Calendar.DAY_OF_YEAR) == calMsg.get(Calendar.DAY_OF_YEAR)
-    if (sameDay) {
-        return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestampMs))
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFF151726),
+        contentColor = Color.White,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+        ) {
+            Text(
+                text = "New Cipher Chat",
+                color = Color.White,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Start an encrypted direct chat or join a mesh channel.",
+                color = Color(0xFF8E93AD),
+                fontSize = 13.5.sp,
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF1D2034))
+                        .border(1.dp, Color(0xFF2C314F), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (customTarget.isEmpty()) {
+                        Text(
+                            text = "Enter #channel or peer ID...",
+                            color = Color(0xFF727896),
+                            fontSize = 14.sp,
+                        )
+                    }
+                    BasicTextField(
+                        value = customTarget,
+                        onValueChange = { customTarget = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
+                        cursorBrush = SolidColor(Color(0xFF8B5CF6)),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(Color(0xFF8352FD), Color(0xFF6938EF)),
+                            )
+                        )
+                        .clickable {
+                            val clean = customTarget.trim()
+                            if (clean.isNotEmpty()) {
+                                val key = if (clean.startsWith("#")) {
+                                    controller.joinChannel(clean)
+                                } else {
+                                    clean.lowercase()
+                                }
+                                onOpenConversation(key)
+                            }
+                        }
+                        .padding(horizontal = 18.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Open",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Quick shortcuts
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color(0xFF1B1E30))
+                    .border(1.dp, Color(0xFF272B42), RoundedCornerShape(18.dp)),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenConversation(MeshStore.RICK_PEER_KEY) }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PeerAvatar(
+                        nickname = "Rick",
+                        peerIdHex = MeshStore.RICK_PEER_KEY,
+                        conversationKey = MeshStore.RICK_PEER_KEY,
+                        size = 40.dp,
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Rick",
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "Nearby • Encrypted DM",
+                            color = Color(0xFF8E93AD),
+                            fontSize = 12.5.sp,
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = Color(0xFF25293E), thickness = 0.7.dp)
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSwitchToChannels() }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PeerAvatar(
+                        nickname = "Mesh Group",
+                        peerIdHex = "#mesh",
+                        conversationKey = "#mesh",
+                        size = 40.dp,
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Browse Location Channels",
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "Join nearby Bluetooth & geohash channels",
+                            color = Color(0xFF8E93AD),
+                            fontSize = 12.5.sp,
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+private fun buildConversationRowItems(
+    controller: MeshController,
+    conversations: Map<String, List<ChatMessage>>,
+    unreadCounts: Map<String, Int>,
+    markedUnread: Set<String>,
+    pinnedSet: Set<String>,
+    mutedSet: Set<String>,
+    query: String,
+): List<ConversationRowItem> {
+    val allKeys = LinkedHashSet<String>()
+    allKeys.addAll(HOME_CONVERSATION_ORDER)
+    allKeys.addAll(conversations.keys)
+
+    val cleanQuery = query.trim().lowercase()
+
+    val items = allKeys.mapNotNull { key ->
+        val msgs = conversations[key].orEmpty()
+        val lastMsg = msgs.lastOrNull()
+        val title = controller.resolveConversationTitle(key)
+        val subtitle = when {
+            lastMsg == null -> if (key.startsWith("#")) "Bluetooth mesh channel" else "Encrypted peer chat"
+            key == "#mesh" && lastMsg.isOutgoing -> "You: ${lastMsg.text}"
+            else -> lastMsg.text.lineSequence().firstOrNull().orEmpty()
+        }
+        if (cleanQuery.isNotEmpty()) {
+            val matchesTitle = title.lowercase().contains(cleanQuery)
+            val matchesSub = subtitle.lowercase().contains(cleanQuery)
+            if (!matchesTitle && !matchesSub) return@mapNotNull null
+        }
+
+        val unread = unreadCounts[key] ?: if (markedUnread.contains(key)) 1 else 0
+        val tsMs = lastMsg?.timestampMs ?: 0L
+        ConversationRowItem(
+            conversationKey = key,
+            title = title,
+            subtitle = subtitle,
+            timestampLabel = formatHomeTimestamp(key, tsMs),
+            lastTimestampMs = tsMs,
+            unreadCount = unread,
+            isPinned = pinnedSet.contains(key),
+            isMuted = mutedSet.contains(key),
+        )
     }
 
-    calNow.add(Calendar.DAY_OF_YEAR, -1)
-    val yesterday = calNow.get(Calendar.YEAR) == calMsg.get(Calendar.YEAR) &&
-        calNow.get(Calendar.DAY_OF_YEAR) == calMsg.get(Calendar.DAY_OF_YEAR)
-    if (yesterday) return "Yesterday"
+    return items.sortedWith { a, b ->
+        val pinCmp = b.isPinned.compareTo(a.isPinned)
+        if (pinCmp != 0) return@sortedWith pinCmp
+        val idxA = HOME_CONVERSATION_ORDER.indexOf(a.conversationKey)
+        val idxB = HOME_CONVERSATION_ORDER.indexOf(b.conversationKey)
+        if (idxA >= 0 && idxB >= 0) {
+            idxA.compareTo(idxB)
+        } else if (idxA >= 0) {
+            -1
+        } else if (idxB >= 0) {
+            1
+        } else {
+            b.lastTimestampMs.compareTo(a.lastTimestampMs)
+        }
+    }
+}
 
-    return SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(timestampMs))
+private fun formatHomeTimestamp(conversationKey: String, timestampMs: Long): String {
+    if (timestampMs <= 0L) return ""
+    val nowCal = Calendar.getInstance()
+    val msgCal = Calendar.getInstance().apply { timeInMillis = timestampMs }
+    val sameDay = nowCal.get(Calendar.YEAR) == msgCal.get(Calendar.YEAR) &&
+        nowCal.get(Calendar.DAY_OF_YEAR) == msgCal.get(Calendar.DAY_OF_YEAR)
+    if (!sameDay) {
+        val yesterdayCal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+        val isYesterday = yesterdayCal.get(Calendar.YEAR) == msgCal.get(Calendar.YEAR) &&
+            yesterdayCal.get(Calendar.DAY_OF_YEAR) == msgCal.get(Calendar.DAY_OF_YEAR)
+        if (isYesterday || conversationKey == "#nearby-chat" || conversationKey == "#field-team") {
+            return "Yesterday"
+        }
+        return SimpleDateFormat("MMM d", Locale.US).format(Date(timestampMs))
+    }
+    return SimpleDateFormat("h:mm a", Locale.US).format(Date(timestampMs))
+}
+
+private fun formatChannelDisplayName(tag: String): String {
+    return when (tag.lowercase()) {
+        "#city-3" -> "City #3"
+        "#mesh-2" -> "Mesh #2"
+        "#block-10" -> "Block #10"
+        "#neighborhood-0" -> "Neighborhood #0"
+        "#9q_k6" -> "#9q_k6"
+        else -> tag
+    }
 }

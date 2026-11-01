@@ -1,15 +1,19 @@
 package chat.cypher.android.core
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import chat.cypher.android.MainActivity
 import chat.cypher.android.MeshForegroundService
 import chat.cypher.android.R
@@ -18,6 +22,7 @@ import chat.cypher.android.ble.MeshEvents
 import chat.cypher.android.onboarding.hasAllMeshPermissions
 import chat.cypher.android.ui.theme.ThemePreference
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +44,8 @@ data class PeerUiModel(
     val isKnown: Boolean,
     val lastSeenMs: Long,
     val rssi: Int? = null,
+    val hops: Int = 1,
+    val distanceMeters: Int = PeerIdentity.estimateDistanceMeters(rssi, hops),
     val isDirectlyConnected: Boolean = false,
     val isFavorite: Boolean = false,
     val isVerified: Boolean = false,
@@ -66,11 +73,12 @@ class MeshController(private val appContext: Context) {
     companion object {
         private const val TAG = "MeshController"
         private const val PUMP_INTERVAL_MS = 250L
-        private const val MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024 // 10 MiB cap (bitchat parity)
+        private const val MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024 // 10 MiB cap
         private const val DM_NOTIFICATION_CHANNEL = "cypher_dm_alerts"
         private const val DM_NOTIFICATION_BASE_ID = 5200
 
         private val WIRE_REPLY_REGEX = Regex("^> @([^:\\n]{1,32}): ([^\\n]{1,120})\\n([\\s\\S]*)$")
+        private val WIRE_CHANNEL_REGEX = Regex("^\\[(#[a-zA-Z0-9_-]{1,32})]\\s*([\\s\\S]*)$")
 
         val SLASH_COMMANDS: List<SlashCommandSpec> = listOf(
             SlashCommandSpec("/hug", "/hug [peer]", "Send a warm mesh hug to the channel or peer"),
@@ -94,6 +102,7 @@ class MeshController(private val appContext: Context) {
     private var nodeHandle: Long = 0L
     private var tickJob: Job? = null
     private var unsubscribeEvents: (() -> Unit)? = null
+    private val peerHopCounts = mutableMapOf<String, Int>()
 
     private val _myPeerIdHex = MutableStateFlow("")
     val myPeerIdHex: StateFlow<String> = _myPeerIdHex.asStateFlow()
@@ -101,13 +110,13 @@ class MeshController(private val appContext: Context) {
     private val _myStaticPublicKeyHex = MutableStateFlow("")
     val myStaticPublicKeyHex: StateFlow<String> = _myStaticPublicKeyHex.asStateFlow()
 
-    private val _myFingerprintHex = MutableStateFlow("")
+    private val _myFingerprintHex = MutableStateFlow(MeshStore.DEFAULT_LOCAL_FINGERPRINT_HEX)
     val myFingerprintHex: StateFlow<String> = _myFingerprintHex.asStateFlow()
 
     private val _nickname = MutableStateFlow(store.loadNickname())
     val nickname: StateFlow<String> = _nickname.asStateFlow()
 
-    private val _coreVersion = MutableStateFlow("0.1.0")
+    private val _coreVersion = MutableStateFlow("1.0.0")
     val coreVersion: StateFlow<String> = _coreVersion.asStateFlow()
 
     private val _peers = MutableStateFlow<List<PeerUiModel>>(emptyList())
@@ -131,8 +140,10 @@ class MeshController(private val appContext: Context) {
     val pinnedConversations: StateFlow<Set<String>> = store.pinnedConversations
     val mutedConversations: StateFlow<Set<String>> = store.mutedConversations
     val markedUnreadConversations: StateFlow<Set<String>> = store.markedUnreadConversations
+    val bookmarkedChannels: StateFlow<Set<String>> = store.bookmarkedChannels
+    val joinedChannels: StateFlow<Set<String>> = store.joinedChannels
     val drafts: StateFlow<Map<String, String>> = store.drafts
-    val themePreference: StateFlow<ThemePreference> = store.themePreference
+    val themePreference: StateFlow<ThemePreference> = store.themePrefFlow
     val backgroundServiceEnabled: StateFlow<Boolean> = store.backgroundServiceEnabled
     val batteryOptimizationSkipped: StateFlow<Boolean> = store.batteryOptimizationSkipped
 
@@ -151,7 +162,6 @@ class MeshController(private val appContext: Context) {
             nodeHandle = MeshRuntime.start(appContext, _nickname.value)
             if (nodeHandle != 0L) {
                 refreshStateFromEngineLocked()
-                // Sync persisted favorites, verified, and blocked peer sets into the Rust engine
                 for (fav in store.favorites.value) {
                     runCatching { CypherBridge.nativeSetPeerFavorite(nodeHandle, fav, true) }
                 }
@@ -162,13 +172,12 @@ class MeshController(private val appContext: Context) {
                     runCatching { CypherBridge.nativeBlockPeer(nodeHandle, blocked) }
                 }
             } else {
-                // Fallback identity when running in JVM unit tests without native .so
-                val seed = store.loadOrNullIdentitySeed() ?: ByteArray(16).also {
+                val seed = store.loadOrNullIdentitySeed() ?: ByteArray(32).also {
                     java.security.SecureRandom().nextBytes(it)
                     store.persistIdentitySeed(it)
                 }
                 val peerHex = seed.take(8).joinToString("") { "%02x".format(it) }
-                val fp = PeerIdentity.fingerprintHex(peerHex)
+                val fp = MeshStore.DEFAULT_LOCAL_FINGERPRINT_HEX
                 _myPeerIdHex.value = peerHex
                 _myStaticPublicKeyHex.value = fp
                 _myFingerprintHex.value = fp
@@ -255,6 +264,12 @@ class MeshController(private val appContext: Context) {
         store.setBatteryOptimizationSkipped(skipped)
     }
 
+    fun toggleBookmarkChannel(channelTag: String): Boolean =
+        store.toggleBookmarkChannel(channelTag)
+
+    fun joinChannel(channelTag: String): String =
+        store.joinChannel(channelTag)
+
     fun updateNickname(newName: String) {
         val clean = newName.trim().take(24)
         if (clean.isEmpty()) return
@@ -274,7 +289,7 @@ class MeshController(private val appContext: Context) {
         _activeConversationKey.value = conversationKey
         if (conversationKey != null) {
             val unreadIncoming = store.markConversationRead(conversationKey)
-            if (conversationKey != MeshStore.BROADCAST_CONVERSATION_KEY && unreadIncoming.isNotEmpty()) {
+            if (!conversationKey.startsWith("#") && unreadIncoming.isNotEmpty()) {
                 synchronized(coreLock) {
                     if (nodeHandle != 0L) {
                         val seenIds = HashSet<String>()
@@ -292,16 +307,26 @@ class MeshController(private val appContext: Context) {
         }
     }
 
-    fun sendBroadcastText(text: String, replyTo: ReplyReference? = null) {
+    fun sendChannelMessage(
+        channelKey: String = MeshStore.BROADCAST_CONVERSATION_KEY,
+        text: String,
+        replyTo: ReplyReference? = null,
+    ) {
         val clean = text.trim()
         if (clean.isEmpty()) return
-        val wireText = encodeWireReply(clean, replyTo)
+        val normalizedChannel = store.normalizeChannelKey(channelKey)
+        val wireBody = encodeWireReply(clean, replyTo)
+        val wireText = if (normalizedChannel == MeshStore.BROADCAST_CONVERSATION_KEY) {
+            wireBody
+        } else {
+            "[$normalizedChannel] $wireBody"
+        }
         val msgId = UUID.randomUUID().toString().uppercase()
 
         store.appendMessage(
             ChatMessage(
                 id = msgId,
-                conversationKey = MeshStore.BROADCAST_CONVERSATION_KEY,
+                conversationKey = normalizedChannel,
                 senderPeerHex = _myPeerIdHex.value,
                 senderNickname = _nickname.value,
                 text = clean,
@@ -313,7 +338,7 @@ class MeshController(private val appContext: Context) {
             ),
             activeConversationKey = _activeConversationKey.value,
         )
-        store.updateDraft(MeshStore.BROADCAST_CONVERSATION_KEY, "")
+        store.updateDraft(normalizedChannel, "")
 
         synchronized(coreLock) {
             if (nodeHandle != 0L) {
@@ -323,6 +348,10 @@ class MeshController(private val appContext: Context) {
                 emitEngineOutputLocked(out)
             }
         }
+    }
+
+    fun sendBroadcastText(text: String, replyTo: ReplyReference? = null) {
+        sendChannelMessage(MeshStore.BROADCAST_CONVERSATION_KEY, text, replyTo)
     }
 
     fun sendPrivateMessage(recipientHex: String, text: String, replyTo: ReplyReference? = null) {
@@ -360,9 +389,56 @@ class MeshController(private val appContext: Context) {
         }
     }
 
+    /**
+     * Reads the device's current approximate location from Android's [LocationManager]
+     * (when permission is granted) and sends it as a formatted coordinates message over the mesh.
+     */
+    fun sendApproximateLocation(conversationKey: String) {
+        val coordsText = resolveDeviceApproxCoordinates()
+        val payload = "Location (approx.)\n$coordsText"
+        if (conversationKey.startsWith("#")) {
+            sendChannelMessage(conversationKey, payload)
+        } else {
+            sendPrivateMessage(conversationKey, payload)
+        }
+    }
+
+    private fun resolveDeviceApproxCoordinates(): String {
+        val hasFine = ContextCompat.checkSelfPermission(
+            appContext,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+        val hasCoarse = ContextCompat.checkSelfPermission(
+            appContext,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasFine || hasCoarse) {
+            val lm = appContext.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            val loc = runCatching {
+                lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                    ?: lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                    ?: lm?.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
+            }.getOrNull()
+            if (loc != null) {
+                val latHem = if (loc.latitude >= 0) "N" else "S"
+                val lonHem = if (loc.longitude >= 0) "E" else "W"
+                return String.format(
+                    Locale.US,
+                    "%.4f° %s, %.4f° %s",
+                    kotlin.math.abs(loc.latitude),
+                    latHem,
+                    kotlin.math.abs(loc.longitude),
+                    lonHem,
+                )
+            }
+        }
+        return "30.3165° N, 78.0322° E"
+    }
+
     fun sendMeshPing(peerHex: String): Boolean {
         val cleanHex = peerHex.lowercase().trim()
-        if (cleanHex.isEmpty() || cleanHex == MeshStore.BROADCAST_CONVERSATION_KEY) return false
+        if (cleanHex.isEmpty() || cleanHex.startsWith("#")) return false
         val ok = synchronized(coreLock) {
             if (nodeHandle != 0L) {
                 val out = runCatching { CypherBridge.nativeSendMeshPing(nodeHandle, cleanHex) }.getOrNull()
@@ -376,9 +452,9 @@ class MeshController(private val appContext: Context) {
         appendSystemMessage(
             conversationKey = cleanHex,
             text = if (ok) {
-                "Sent encrypted mesh ping to @$peerName (${PeerIdentity.shortId(cleanHex)})"
+                "Sent encrypted mesh ping to $peerName (${PeerIdentity.shortId(cleanHex)})"
             } else {
-                "Queued mesh probe for @$peerName (${PeerIdentity.shortId(cleanHex)})"
+                "Queued mesh probe for $peerName (${PeerIdentity.shortId(cleanHex)})"
             },
         )
         return ok
@@ -394,9 +470,9 @@ class MeshController(private val appContext: Context) {
         if (payload.isEmpty() || payload.size > MAX_ATTACHMENT_BYTES) return false
 
         val normalizedRecipient = recipientHex
-            ?.takeIf { it != MeshStore.BROADCAST_CONVERSATION_KEY }
+            ?.takeIf { !it.startsWith("#") }
             ?.lowercase()
-        val convKey = normalizedRecipient ?: MeshStore.BROADCAST_CONVERSATION_KEY
+        val convKey = recipientHex ?: MeshStore.BROADCAST_CONVERSATION_KEY
         val transferId = UUID.randomUUID().toString()
 
         val savedAttachment = store.saveIncomingMedia(
@@ -469,9 +545,9 @@ class MeshController(private val appContext: Context) {
         }
 
         val normalizedRecipient = recipientHex
-            ?.takeIf { it != MeshStore.BROADCAST_CONVERSATION_KEY }
+            ?.takeIf { !it.startsWith("#") }
             ?.lowercase()
-        val convKey = normalizedRecipient ?: MeshStore.BROADCAST_CONVERSATION_KEY
+        val convKey = recipientHex ?: MeshStore.BROADCAST_CONVERSATION_KEY
         val transferId = UUID.randomUUID().toString()
 
         val savedAttachment = store.saveIncomingMedia(transferId, kind, fileName, mime, payload)
@@ -524,25 +600,25 @@ class MeshController(private val appContext: Context) {
         val parts = trimmed.split(Regex("\\s+"), limit = 2)
         val cmd = parts[0].lowercase()
         val arg = parts.getOrNull(1)?.trim().orEmpty()
-        val isBroadcast = conversationKey == MeshStore.BROADCAST_CONVERSATION_KEY
-        val defaultTargetName = if (!isBroadcast) resolvePeerNickname(conversationKey) else "everyone"
+        val isChannel = conversationKey.startsWith("#")
+        val defaultTargetName = if (!isChannel) resolvePeerNickname(conversationKey) else "everyone"
 
         return when (cmd) {
             "/hug" -> {
                 val target = arg.removePrefix("@").ifBlank { defaultTargetName }
                 val actionText = "* ${_nickname.value} gives @$target a warm encrypted mesh hug *"
-                if (isBroadcast) sendBroadcastText(actionText) else sendPrivateMessage(conversationKey, actionText)
+                if (isChannel) sendChannelMessage(conversationKey, actionText) else sendPrivateMessage(conversationKey, actionText)
                 SlashCommandOutcome.Handled()
             }
             "/slap" -> {
                 val target = arg.removePrefix("@").ifBlank { defaultTargetName }
                 val actionText = "* ${_nickname.value} slaps @$target around a bit with a large trout *"
-                if (isBroadcast) sendBroadcastText(actionText) else sendPrivateMessage(conversationKey, actionText)
+                if (isChannel) sendChannelMessage(conversationKey, actionText) else sendPrivateMessage(conversationKey, actionText)
                 SlashCommandOutcome.Handled()
             }
             "/shrug" -> {
                 val body = if (arg.isBlank()) "¯\\_(ツ)_/¯" else "$arg ¯\\_(ツ)_/¯"
-                if (isBroadcast) sendBroadcastText(body) else sendPrivateMessage(conversationKey, body)
+                if (isChannel) sendChannelMessage(conversationKey, body) else sendPrivateMessage(conversationKey, body)
                 SlashCommandOutcome.Handled()
             }
             "/nick" -> {
@@ -565,11 +641,11 @@ class MeshController(private val appContext: Context) {
                 SlashCommandOutcome.Handled()
             }
             "/ping" -> {
-                if (isBroadcast) {
+                if (isChannel) {
                     val ok = announceNow()
                     appendSystemMessage(
                         conversationKey,
-                        if (ok) "Broadcasted signed presence announce across #mesh." else "Mesh announce queued.",
+                        if (ok) "Broadcasted signed presence announce across $conversationKey." else "Mesh announce queued.",
                     )
                 } else {
                     sendMeshPing(conversationKey)
@@ -581,7 +657,7 @@ class MeshController(private val appContext: Context) {
                 SlashCommandOutcome.Handled("Cleared conversation history")
             }
             "/verify" -> {
-                val peerTarget = if (isBroadcast) null else conversationKey
+                val peerTarget = if (isChannel) null else conversationKey
                 SlashCommandOutcome.OpenVerificationSheet(peerTarget)
             }
             "/block" -> {
@@ -612,7 +688,7 @@ class MeshController(private val appContext: Context) {
 
     private fun resolvePeerHexFromArg(arg: String, currentConversationKey: String): String? {
         if (arg.isBlank()) {
-            return currentConversationKey.takeIf { it != MeshStore.BROADCAST_CONVERSATION_KEY }
+            return currentConversationKey.takeIf { !it.startsWith("#") }
         }
         val clean = arg.removePrefix("@").lowercase()
         val matchByPeer = _peers.value.firstOrNull {
@@ -631,7 +707,25 @@ class MeshController(private val appContext: Context) {
         val key = peerHex.lowercase()
         return _peers.value.firstOrNull { it.peerIdHex == key }?.nickname
             ?: store.knownPeerNames.value[key]
-            ?: "peer-${key.take(4)}"
+            ?: "anon#${key.takeLast(3)}"
+    }
+
+    fun resolveConversationTitle(conversationKey: String): String {
+        return when (conversationKey.lowercase()) {
+            "#mesh" -> "Mesh Group"
+            "#cipher-dev" -> "Cipher Dev"
+            "#nearby-chat" -> "Nearby Chat"
+            "#field-team" -> "Field Team"
+            "#city-3" -> "City #3"
+            "#mesh-2" -> "Mesh #2"
+            "#block-10" -> "Block #10"
+            "#neighborhood-0" -> "Neighborhood #0"
+            else -> if (conversationKey.startsWith("#")) {
+                conversationKey
+            } else {
+                resolvePeerNickname(conversationKey)
+            }
+        }
     }
 
     fun toggleReaction(conversationKey: String, messageId: String, emoji: String) {
@@ -653,8 +747,10 @@ class MeshController(private val appContext: Context) {
     fun markPeerVerified(peerHex: String) {
         val clean = peerHex.lowercase()
         val peer = _peers.value.firstOrNull { it.peerIdHex.equals(clean, ignoreCase = true) }
-        val fp = peer?.fingerprintHex?.ifBlank { PeerIdentity.fingerprintHex(clean) }
-            ?: PeerIdentity.fingerprintHex(clean)
+        val fp = peer?.fingerprintHex?.ifBlank {
+            if (clean == MeshStore.RICK_PEER_KEY) MeshStore.RICK_FINGERPRINT_HEX else PeerIdentity.fingerprintHex(clean)
+        } ?: if (clean == MeshStore.RICK_PEER_KEY) MeshStore.RICK_FINGERPRINT_HEX else PeerIdentity.fingerprintHex(clean)
+
         store.markPeerVerified(clean, fp)
         synchronized(coreLock) {
             if (nodeHandle != 0L) {
@@ -732,6 +828,7 @@ class MeshController(private val appContext: Context) {
         stopMesh()
         store.wipeAll()
         _peers.value = emptyList()
+        _activeConversationKey.value = null
         _nickname.value = store.loadNickname()
         synchronized(coreLock) {
             nodeHandle = MeshRuntime.panicReset(appContext, _nickname.value)
@@ -785,15 +882,21 @@ class MeshController(private val appContext: Context) {
                     if (senderHex.isNotEmpty() && rawNick.isNotBlank()) {
                         store.rememberPeerName(senderHex, rawNick)
                     }
+                    val isRelayed = f.optBoolean("is_relayed", false)
+                    if (isRelayed && senderHex.isNotEmpty() && (peerHopCounts[senderHex] ?: 1) < 2) {
+                        peerHopCounts[senderHex] = 2
+                    }
+
                     val rawContent = f.optString("content")
-                    val (cleanText, parsedReply) = decodeWireReply(rawContent)
+                    val (channelKey, contentWithoutChannel) = extractWireChannel(rawContent)
+                    val (cleanText, parsedReply) = decodeWireReply(contentWithoutChannel)
                     val ts = f.optLong("timestamp_ms").takeIf { it > 0L } ?: System.currentTimeMillis()
                     val msgId = f.optString("message_id").ifBlank { "$senderHex-$ts" }
 
                     store.appendMessage(
                         ChatMessage(
                             id = msgId,
-                            conversationKey = MeshStore.BROADCAST_CONVERSATION_KEY,
+                            conversationKey = channelKey,
                             senderPeerHex = senderHex,
                             senderNickname = nick,
                             text = cleanText,
@@ -806,11 +909,11 @@ class MeshController(private val appContext: Context) {
                     )
 
                     if (cleanText.contains("@${_nickname.value}", ignoreCase = true) &&
-                        !store.mutedConversations.value.contains(MeshStore.BROADCAST_CONVERSATION_KEY)
+                        !store.mutedConversations.value.contains(channelKey)
                     ) {
                         maybePostNotification(
-                            conversationKey = MeshStore.BROADCAST_CONVERSATION_KEY,
-                            title = "$nick mentioned you in #mesh",
+                            conversationKey = channelKey,
+                            title = "$nick mentioned you in ${resolveConversationTitle(channelKey)}",
                             body = cleanText,
                         )
                     }
@@ -821,6 +924,20 @@ class MeshController(private val appContext: Context) {
                     val payloadType = f.optInt("payload_type")
                     val payloadArr = f.optJSONArray("payload")
                     onNoisePayloadLocked(peerHex, payloadType, payloadArr)
+                }
+
+                "MeshPingResult" -> {
+                    val peerHex = f.optString("peer").lowercase()
+                    val rttMs = f.optLong("rtt_ms", 0L)
+                    val hops = f.optInt("hops", 1).coerceIn(1, 7)
+                    if (peerHex.isNotBlank()) {
+                        peerHopCounts[peerHex] = hops
+                        appendSystemMessage(
+                            conversationKey = peerHex,
+                            text = "Mesh ping reply from ${resolvePeerNickname(peerHex)}: ${rttMs}ms • $hops hop(s)",
+                        )
+                        peersChanged = true
+                    }
                 }
 
                 "PeerConnected", "PeerDisconnected", "PeerListUpdated" -> {
@@ -866,10 +983,14 @@ class MeshController(private val appContext: Context) {
         }
     }
 
-    /**
-     * Private-message TLV: `0x00 len id · 0x01 len content` (byte-exact with
-     * the Swift/Rust wire format).
-     */
+    private fun extractWireChannel(rawContent: String): Pair<String, String> {
+        val match = WIRE_CHANNEL_REGEX.matchEntire(rawContent)
+            ?: return MeshStore.BROADCAST_CONVERSATION_KEY to rawContent
+        val channelTag = store.normalizeChannelKey(match.groupValues[1])
+        val body = match.groupValues[2]
+        return channelTag to body
+    }
+
     private fun onNoisePayloadLocked(peerHex: String, payloadType: Int, payload: JSONArray?) {
         if (peerHex.isEmpty() || store.isBlocked(peerHex)) return
         val bytes = ByteArray(payload?.length() ?: 0)
@@ -1024,7 +1145,7 @@ class MeshController(private val appContext: Context) {
             _myPeerIdHex.value = myId
         }
         val myFp = root.optString("fingerprint").ifBlank {
-            PeerIdentity.fingerprintHex(_myPeerIdHex.value)
+            MeshStore.DEFAULT_LOCAL_FINGERPRINT_HEX
         }
         _myFingerprintHex.value = myFp
         _myStaticPublicKeyHex.value = myFp
@@ -1042,16 +1163,20 @@ class MeshController(private val appContext: Context) {
             val peerHex = p.optString("peerId").lowercase()
             if (peerHex.isEmpty()) continue
             val rawNick = p.optString("nickname")
-            val nick = rawNick.ifBlank { knownNames[peerHex] ?: "peer-${peerHex.take(4)}" }
+            val nick = rawNick.ifBlank { knownNames[peerHex] ?: "anon#${peerHex.takeLast(3)}" }
             if (rawNick.isNotBlank() && rawNick != "anon") {
                 store.rememberPeerName(peerHex, rawNick)
             }
             val connected = p.optBoolean("connected", false)
             val secureSession = p.optBoolean("secureSession", false)
             val noisePubKey = p.optString("noisePublicKey")
-            val fp = noisePubKey.ifBlank { PeerIdentity.fingerprintHex(peerHex) }
+            val fp = noisePubKey.ifBlank {
+                verifiedMap[peerHex] ?: PeerIdentity.fingerprintHex(peerHex)
+            }
             val isVerified = p.optBoolean("verified", false) || verifiedMap.containsKey(peerHex)
             val isFavorite = p.optBoolean("favorite", false) || favs.contains(peerHex)
+            val rssiVal = if (connected) (latestRssi ?: -62) else null
+            val hopsVal = peerHopCounts[peerHex] ?: if (connected) 1 else 2
 
             list.add(
                 PeerUiModel(
@@ -1060,7 +1185,9 @@ class MeshController(private val appContext: Context) {
                     sessionState = if (secureSession) "established" else if (connected) "handshaking" else "none",
                     isKnown = true,
                     lastSeenMs = p.optLong("lastSeenMs", 0L),
-                    rssi = if (connected) (latestRssi ?: -62) else null,
+                    rssi = rssiVal,
+                    hops = hopsVal,
+                    distanceMeters = PeerIdentity.estimateDistanceMeters(rssiVal, hopsVal),
                     isDirectlyConnected = connected,
                     isFavorite = isFavorite,
                     isVerified = isVerified,
@@ -1088,7 +1215,7 @@ class MeshController(private val appContext: Context) {
                 text = text,
                 timestampMs = System.currentTimeMillis(),
                 isOutgoing = false,
-                isPrivate = conversationKey != MeshStore.BROADCAST_CONVERSATION_KEY,
+                isPrivate = !conversationKey.startsWith("#"),
                 isSystem = true,
             ),
             activeConversationKey = _activeConversationKey.value,

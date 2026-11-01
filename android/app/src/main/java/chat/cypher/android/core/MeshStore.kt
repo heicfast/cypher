@@ -8,6 +8,7 @@ import android.util.Base64
 import chat.cypher.android.ui.theme.ThemePreference
 import java.io.File
 import java.security.KeyStore
+import java.util.Calendar
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -85,8 +86,8 @@ data class ConversationBackup(
 )
 
 /**
- * Persistent storage for Cypher identity seed (AES-GCM Keystore wrapped),
- * conversations, peer metadata, verified fingerprints, and UI preferences.
+ * Persistent storage for Cipher identity seed (AES-GCM Keystore wrapped),
+ * conversations, local mesh channels, peer metadata, verified fingerprints, and UI preferences.
  */
 class MeshStore(private val context: Context) {
     companion object {
@@ -104,19 +105,24 @@ class MeshStore(private val context: Context) {
         private const val KEY_PINNED_CONVS = "pinned_conversations"
         private const val KEY_MUTED_CONVS = "muted_conversations"
         private const val KEY_MARKED_UNREAD = "marked_unread_conversations"
+        private const val KEY_BOOKMARKED_CHANNELS = "bookmarked_channels"
+        private const val KEY_JOINED_CHANNELS = "joined_channels"
         private const val KEY_THEME_PREF = "theme_preference"
         private const val KEY_BG_SERVICE_ENABLED = "background_service_enabled"
         private const val KEY_BATTERY_OPT_SKIPPED = "battery_optimization_skipped"
 
         const val BROADCAST_CONVERSATION_KEY = "#mesh"
+        const val RICK_PEER_KEY = "26c0a26457a1895c"
+        const val RICK_FINGERPRINT_HEX = "26c0a26457a1895c2e964131d23fb48ed437b975be8d7669b5aab75254f351cb"
+        const val DEFAULT_LOCAL_FINGERPRINT_HEX = "3501df1fc3eb113f9023da3232e2d77fd940929fb924f08b4c71a1268d590add"
+
         private const val MAX_MESSAGES_PER_CONVERSATION = 500
     }
 
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    private val historyFile: File = File(context.filesDir, "conversations_v2.json")
-    private val legacyHistoryFile: File = File(context.filesDir, "conversations_v1.json")
+    private val historyFile: File = File(context.filesDir, "conversations_v3.json")
     private val mediaDir: File = File(context.filesDir, "media").apply { mkdirs() }
 
     private val _conversations = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
@@ -146,11 +152,22 @@ class MeshStore(private val context: Context) {
     private val _markedUnreadConversations = MutableStateFlow<Set<String>>(emptySet())
     val markedUnreadConversations: StateFlow<Set<String>> = _markedUnreadConversations.asStateFlow()
 
+    private val _bookmarkedChannels = MutableStateFlow<Set<String>>(
+        setOf("#9q_k6", "#city-3"),
+    )
+    val bookmarkedChannels: StateFlow<Set<String>> = _bookmarkedChannels.asStateFlow()
+
+    private val _joinedChannels = MutableStateFlow<Set<String>>(
+        setOf("#mesh", "#cipher-dev", "#nearby-chat", "#field-team", "#9q_k6", "#city-3"),
+    )
+    val joinedChannels: StateFlow<Set<String>> = _joinedChannels.asStateFlow()
+
     private val _drafts = MutableStateFlow<Map<String, String>>(emptyMap())
     val drafts: StateFlow<Map<String, String>> = _drafts.asStateFlow()
 
     private val _themePreference = MutableStateFlow(ThemePreference.DARK)
     val themePreference: StateFlow<ThemePreference> = _themePreference.asStateFlow()
+    val themePrefFlow: StateFlow<ThemePreference> = _themePreference.asStateFlow()
 
     private val _backgroundServiceEnabled = MutableStateFlow(true)
     val backgroundServiceEnabled: StateFlow<Boolean> = _backgroundServiceEnabled.asStateFlow()
@@ -207,7 +224,7 @@ class MeshStore(private val context: Context) {
     fun loadNickname(): String {
         val existing = prefs.getString(KEY_NICKNAME, null)
         if (!existing.isNullOrBlank()) return existing
-        val generated = "Alex"
+        val generated = "cipher"
         saveNickname(generated)
         return generated
     }
@@ -229,6 +246,40 @@ class MeshStore(private val context: Context) {
     fun setBatteryOptimizationSkipped(skipped: Boolean) {
         _batteryOptimizationSkipped.value = skipped
         prefs.edit().putBoolean(KEY_BATTERY_OPT_SKIPPED, skipped).apply()
+    }
+
+    fun toggleBookmarkChannel(channelTag: String): Boolean {
+        val clean = normalizeChannelKey(channelTag)
+        var bookmarked = false
+        _bookmarkedChannels.update { current ->
+            if (current.contains(clean)) {
+                bookmarked = false
+                current - clean
+            } else {
+                bookmarked = true
+                current + clean
+            }
+        }
+        prefs.edit().putStringSet(KEY_BOOKMARKED_CHANNELS, _bookmarkedChannels.value).apply()
+        return bookmarked
+    }
+
+    fun joinChannel(channelTag: String): String {
+        val clean = normalizeChannelKey(channelTag)
+        _joinedChannels.update { it + clean }
+        prefs.edit().putStringSet(KEY_JOINED_CHANNELS, _joinedChannels.value).apply()
+        if (!_conversations.value.containsKey(clean)) {
+            _conversations.update { it + (clean to emptyList()) }
+            schedulePersistHistory()
+        }
+        return clean
+    }
+
+    fun normalizeChannelKey(raw: String): String {
+        val stripped = raw.trim().removePrefix("#").lowercase()
+            .replace(Regex("[^a-z0-9_-]"), "-")
+            .ifBlank { "mesh" }
+        return "#$stripped"
     }
 
     fun rememberPeerName(peerHex: String, nickname: String) {
@@ -345,6 +396,9 @@ class MeshStore(private val context: Context) {
             val updated = (existing + message).takeLast(MAX_MESSAGES_PER_CONVERSATION)
             map + (message.conversationKey to updated)
         }
+        if (message.conversationKey.startsWith("#")) {
+            _joinedChannels.update { it + message.conversationKey }
+        }
         if (added && !message.isOutgoing && !message.isSystem &&
             activeConversationKey != message.conversationKey
         ) {
@@ -410,11 +464,7 @@ class MeshStore(private val context: Context) {
 
     fun clearConversationMessages(conversationKey: String) {
         _conversations.update { map ->
-            if (conversationKey == BROADCAST_CONVERSATION_KEY) {
-                map + (BROADCAST_CONVERSATION_KEY to emptyList())
-            } else {
-                map + (conversationKey to emptyList())
-            }
+            map + (conversationKey to emptyList())
         }
         _unreadCounts.update { it - conversationKey }
         schedulePersistHistory()
@@ -502,7 +552,6 @@ class MeshStore(private val context: Context) {
             }
         }
         runCatching { historyFile.delete() }
-        runCatching { legacyHistoryFile.delete() }
         runCatching { mediaDir.deleteRecursively(); mediaDir.mkdirs() }
         _conversations.value = emptyMap()
         _unreadCounts.value = emptyMap()
@@ -513,6 +562,8 @@ class MeshStore(private val context: Context) {
         _pinnedConversations.value = emptySet()
         _mutedConversations.value = emptySet()
         _markedUnreadConversations.value = emptySet()
+        _bookmarkedChannels.value = emptySet()
+        _joinedChannels.value = setOf(BROADCAST_CONVERSATION_KEY)
         _drafts.value = emptyMap()
     }
 
@@ -522,11 +573,20 @@ class MeshStore(private val context: Context) {
         _pinnedConversations.value = prefs.getStringSet(KEY_PINNED_CONVS, emptySet()).orEmpty().toSet()
         _mutedConversations.value = prefs.getStringSet(KEY_MUTED_CONVS, emptySet()).orEmpty().toSet()
         _markedUnreadConversations.value = prefs.getStringSet(KEY_MARKED_UNREAD, emptySet()).orEmpty().toSet()
+        _bookmarkedChannels.value = prefs.getStringSet(
+            KEY_BOOKMARKED_CHANNELS,
+            setOf("#9q_k6", "#city-3"),
+        ).orEmpty().toSet()
+        _joinedChannels.value = prefs.getStringSet(
+            KEY_JOINED_CHANNELS,
+            setOf("#mesh", "#cipher-dev", "#nearby-chat", "#field-team", "#9q_k6", "#city-3"),
+        ).orEmpty().toSet()
+
         _markedUnreadConversations.value.forEach { key ->
             _unreadCounts.update { it + (key to (it[key] ?: 1)) }
         }
         _themePreference.value = ThemePreference.fromStorage(
-            prefs.getString(KEY_THEME_PREF, ThemePreference.DARK.name)
+            prefs.getString(KEY_THEME_PREF, ThemePreference.DARK.name),
         )
         _backgroundServiceEnabled.value = prefs.getBoolean(KEY_BG_SERVICE_ENABLED, true)
         _batteryOptimizationSkipped.value = prefs.getBoolean(KEY_BATTERY_OPT_SKIPPED, false)
@@ -611,16 +671,12 @@ class MeshStore(private val context: Context) {
     }
 
     private fun loadHistoryFromDisk() {
-        val sourceFile = when {
-            historyFile.exists() -> historyFile
-            legacyHistoryFile.exists() -> legacyHistoryFile
-            else -> {
-                seedInitialShowcaseConversations()
-                return
-            }
+        if (!historyFile.exists()) {
+            seedInitialCipherConversations()
+            return
         }
         runCatching {
-            val root = JSONObject(sourceFile.readText())
+            val root = JSONObject(historyFile.readText())
             val loaded = mutableMapOf<String, List<ChatMessage>>()
             val keys = root.keys()
             while (keys.hasNext()) {
@@ -677,158 +733,167 @@ class MeshStore(private val context: Context) {
         }
     }
 
-    private fun seedInitialShowcaseConversations() {
-        val now = System.currentTimeMillis()
-        val jennyKey = "a101b202c303d501"
-        val guyKey = "a101b202c303d502"
-        val kristinKey = "a101b202c303d503"
-        val arleneKey = "a101b202c303d504"
-        val danielKey = "a101b202c303d505"
+    private fun todayAt(hourOfDay: Int, minute: Int): Long {
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, hourOfDay)
+        cal.set(Calendar.MINUTE, minute)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+
+    private fun seedInitialCipherConversations() {
+        val yesterdayMs = System.currentTimeMillis() - 24 * 3_600_000L
 
         val seededNames = mapOf(
-            jennyKey to "Jenny Wilson",
-            guyKey to "Guy Hawkins",
-            kristinKey to "Kristin Watson",
-            arleneKey to "Arlene McCoy",
-            danielKey to "Daniel Garcia",
+            RICK_PEER_KEY to "Rick",
+            "8c90a1b2c3d408c9" to "anon#8c9",
+            "6740a1b2c3d40674" to "anon#674",
+            "a1b2c3d4e5f60003" to "@gesamtkunstwerk",
+            "a1b2c3d4e5f60004" to "@nedu",
+            "a1b2c3d4e5f60005" to "@ninja",
+            "a1b2c3d4e5f60006" to "@w411p4p4p3r",
+            "a1b2c3d4e5f60007" to "wonkoTS",
         )
         _knownPeerNames.update { it + seededNames }
+        _verifiedPeers.update { it + (RICK_PEER_KEY to RICK_FINGERPRINT_HEX) }
 
-        val danielMessages = listOf(
+        val meshGroupMessages = listOf(
             ChatMessage(
-                id = "seed_daniel_1",
-                conversationKey = danielKey,
-                senderPeerHex = danielKey,
-                senderNickname = "Daniel Garcia",
-                text = "Hi 😊 It's good. Yours",
-                timestampMs = now - 14 * 60_000L,
+                id = "seed_mesh_1",
+                conversationKey = BROADCAST_CONVERSATION_KEY,
+                senderPeerHex = RICK_PEER_KEY,
+                senderNickname = "Rick",
+                text = "Relay hop test across Sector 4 looks solid.",
+                timestampMs = todayAt(10, 18),
+                isOutgoing = false,
+                isPrivate = false,
+                delivery = DeliveryState.READ,
+            ),
+            ChatMessage(
+                id = "seed_mesh_2",
+                conversationKey = BROADCAST_CONVERSATION_KEY,
+                senderPeerHex = "self",
+                senderNickname = "You",
+                text = "The meetup is still on.",
+                timestampMs = todayAt(10, 24),
+                isOutgoing = true,
+                isPrivate = false,
+                delivery = DeliveryState.READ,
+            ),
+        )
+
+        val rickMessages = listOf(
+            ChatMessage(
+                id = "seed_rick_1",
+                conversationKey = RICK_PEER_KEY,
+                senderPeerHex = RICK_PEER_KEY,
+                senderNickname = "Rick",
+                text = "Hey! Are you nearby?",
+                timestampMs = todayAt(9, 32),
                 isOutgoing = false,
                 isPrivate = true,
                 delivery = DeliveryState.READ,
             ),
             ChatMessage(
-                id = "seed_daniel_2",
-                conversationKey = danielKey,
+                id = "seed_rick_2",
+                conversationKey = RICK_PEER_KEY,
                 senderPeerHex = "self",
-                senderNickname = "Alex",
-                text = "It seem we have a lot common and have a lot interest in each other 😂",
-                timestampMs = now - 12 * 60_000L,
+                senderNickname = "You",
+                text = "Yes, I'm within range. Mesh is strong (2 hops).",
+                timestampMs = todayAt(9, 34),
                 isOutgoing = true,
                 isPrivate = true,
                 delivery = DeliveryState.READ,
             ),
             ChatMessage(
-                id = "seed_daniel_3",
-                conversationKey = danielKey,
-                senderPeerHex = danielKey,
-                senderNickname = "Daniel Garcia",
-                text = "Portrait concept",
-                timestampMs = now - 9 * 60_000L,
+                id = "seed_rick_3",
+                conversationKey = RICK_PEER_KEY,
+                senderPeerHex = RICK_PEER_KEY,
+                senderNickname = "Rick",
+                text = "Great! Can you share the meeting point?",
+                timestampMs = todayAt(9, 36),
                 isOutgoing = false,
                 isPrivate = true,
                 delivery = DeliveryState.READ,
-                attachment = MediaAttachment(
-                    kind = AttachmentKind.IMAGE,
-                    fileName = "portrait_concept.jpg",
-                    mimeType = "image/jpeg",
-                    localPath = "",
-                    sizeBytes = 48_120,
-                ),
             ),
             ChatMessage(
-                id = "seed_daniel_4",
-                conversationKey = danielKey,
-                senderPeerHex = danielKey,
-                senderNickname = "Daniel Garcia",
-                text = "Voice note",
-                timestampMs = now - 6 * 60_000L,
-                isOutgoing = false,
-                isPrivate = true,
-                delivery = DeliveryState.READ,
-                attachment = MediaAttachment(
-                    kind = AttachmentKind.AUDIO,
-                    fileName = "voice_note.m4a",
-                    mimeType = "audio/mp4",
-                    localPath = "",
-                    sizeBytes = 32_400,
-                    durationMs = 165_000L, // 2:45
-                ),
-            ),
-            ChatMessage(
-                id = "seed_daniel_5",
-                conversationKey = danielKey,
+                id = "seed_rick_4",
+                conversationKey = RICK_PEER_KEY,
                 senderPeerHex = "self",
-                senderNickname = "Alex",
-                text = "Good Concepts!!",
-                timestampMs = now - 4 * 60_000L,
+                senderNickname = "You",
+                text = "Location (approx.)\n30.3165° N, 78.0322° E",
+                timestampMs = todayAt(9, 37),
                 isOutgoing = true,
                 isPrivate = true,
                 delivery = DeliveryState.READ,
             ),
-        )
-
-        val jennyMessages = listOf(
             ChatMessage(
-                id = "seed_jenny_1",
-                conversationKey = jennyKey,
-                senderPeerHex = jennyKey,
-                senderNickname = "Jenny Wilson",
-                text = "Sure, I'll be there in 5...",
-                timestampMs = now - 2 * 60_000L,
+                id = "seed_rick_5",
+                conversationKey = RICK_PEER_KEY,
+                senderPeerHex = RICK_PEER_KEY,
+                senderNickname = "Rick",
+                text = "See you there! 👋",
+                timestampMs = todayAt(9, 41),
                 isOutgoing = false,
                 isPrivate = true,
                 delivery = DeliveryState.DELIVERED,
             ),
         )
 
-        val guyMessages = listOf(
+        val cipherDevMessages = listOf(
             ChatMessage(
-                id = "seed_guy_1",
-                conversationKey = guyKey,
-                senderPeerHex = guyKey,
-                senderNickname = "Guy Hawkins",
-                text = "I'll get back to you on...",
-                timestampMs = now - 35 * 60_000L,
+                id = "seed_dev_1",
+                conversationKey = "#cipher-dev",
+                senderPeerHex = "a1b2c3d4e5f60004",
+                senderNickname = "@nedu",
+                text = "New build is really stable.",
+                timestampMs = todayAt(8, 37),
                 isOutgoing = false,
-                isPrivate = true,
-                delivery = DeliveryState.DELIVERED,
+                isPrivate = false,
+                delivery = DeliveryState.READ,
             ),
         )
 
-        val kristinMessages = listOf(
+        val nearbyChatMessages = listOf(
             ChatMessage(
-                id = "seed_kristin_1",
-                conversationKey = kristinKey,
-                senderPeerHex = kristinKey,
-                senderNickname = "Kristin Watson",
-                text = "Keep you in the loop!",
-                timestampMs = now - 52 * 60_000L,
+                id = "seed_nearby_1",
+                conversationKey = "#nearby-chat",
+                senderPeerHex = "8c90a1b2c3d408c9",
+                senderNickname = "anon#8c9",
+                text = "12 people online",
+                timestampMs = yesterdayMs,
                 isOutgoing = false,
-                isPrivate = true,
-                delivery = DeliveryState.DELIVERED,
+                isPrivate = false,
+                delivery = DeliveryState.READ,
             ),
         )
 
-        val arleneMessages = listOf(
+        val fieldTeamMessages = listOf(
             ChatMessage(
-                id = "seed_arlene_1",
-                conversationKey = arleneKey,
-                senderPeerHex = arleneKey,
-                senderNickname = "Arlene McCoy",
-                text = "I'll take a peek, but n...",
-                timestampMs = now - 26 * 3_600_000L,
+                id = "seed_field_1",
+                conversationKey = "#field-team",
+                senderPeerHex = "a1b2c3d4e5f60005",
+                senderNickname = "@ninja",
+                text = "Location update?",
+                timestampMs = yesterdayMs - 1800_000L,
                 isOutgoing = false,
-                isPrivate = true,
-                delivery = DeliveryState.DELIVERED,
+                isPrivate = false,
+                delivery = DeliveryState.READ,
             ),
         )
 
         _conversations.value = linkedMapOf(
-            jennyKey to jennyMessages,
-            guyKey to guyMessages,
-            kristinKey to kristinMessages,
-            arleneKey to arleneMessages,
-            danielKey to danielMessages,
+            BROADCAST_CONVERSATION_KEY to meshGroupMessages,
+            RICK_PEER_KEY to rickMessages,
+            "#cipher-dev" to cipherDevMessages,
+            "#nearby-chat" to nearbyChatMessages,
+            "#field-team" to fieldTeamMessages,
+        )
+
+        _unreadCounts.value = mapOf(
+            BROADCAST_CONVERSATION_KEY to 3,
+            RICK_PEER_KEY to 1,
         )
     }
 

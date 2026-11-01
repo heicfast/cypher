@@ -25,8 +25,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,13 +53,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Power
-import androidx.compose.material.icons.filled.Radar
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -80,8 +81,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -93,6 +99,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import chat.cypher.android.ui.components.CipherChainLogo
 import chat.cypher.android.ui.theme.CypherDisplayFontFamily
 import chat.cypher.android.ui.theme.CypherMonoFontFamily
 import chat.cypher.android.ui.theme.LocalCypherPalette
@@ -126,11 +133,6 @@ object BatteryOptimizationHelper {
         }
     }
 
-    /**
-     * Launches the system exemption dialog (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`)
-     * and falls back to the system Battery Optimization list (`ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`)
-     * or App Details Settings (`ACTION_APPLICATION_DETAILS_SETTINGS`) if the direct intent fails.
-     */
     fun launchExemptionRequest(
         context: Context,
         launcher: ActivityResultLauncher<Intent>? = null,
@@ -236,7 +238,6 @@ fun OnboardingFlow(
 
     var step by remember { mutableStateOf(computeStep(batteryOptimizationSkipped)) }
 
-    // Re-evaluate onboarding step whenever the user returns from any system Settings screen or dialog
     DisposableEffect(lifecycleOwner, batteryOptimizationSkipped) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -260,8 +261,15 @@ fun OnboardingFlow(
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
-    ) {
-        refreshTrigger++
+    ) { resultMap ->
+        val allGranted = resultMap.values.all { it }
+        if (allGranted) {
+            refreshTrigger++
+        } else {
+            // In emulator/preview or if denied, still allow entering the app cleanly
+            onSetBatteryOptimizationSkipped(true)
+            step = OnboardingStep.INITIALIZING
+        }
     }
 
     val enableBtLauncher = rememberLauncherForActivityResult(
@@ -284,7 +292,7 @@ fun OnboardingFlow(
     LaunchedEffect(step) {
         if (step == OnboardingStep.INITIALIZING) {
             onReady()
-            delay(450)
+            delay(300)
             step = OnboardingStep.COMPLETE
         } else if (step == OnboardingStep.COMPLETE) {
             onReady()
@@ -302,9 +310,9 @@ fun OnboardingFlow(
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        palette.canvas,
-                        palette.surface0,
-                        palette.canvas,
+                        Color(0xFF0E0F1A),
+                        Color(0xFF151329),
+                        Color(0xFF0D0E17),
                     ),
                 ),
             )
@@ -321,20 +329,28 @@ fun OnboardingFlow(
             when (targetStep) {
                 OnboardingStep.CHECKING,
                 OnboardingStep.PERMISSION_EXPLANATION,
-                -> PermissionExplanationScreen(
-                    onContinue = {
-                        permissionLauncher.launch(requiredMeshPermissions().toTypedArray())
-                    },
-                    onSkipForEmulator = {
-                        step = OnboardingStep.INITIALIZING
+                -> CipherWelcomeScreen(
+                    onGetStarted = {
+                        val perms = requiredMeshPermissions()
+                        if (perms.isEmpty()) {
+                            onSetBatteryOptimizationSkipped(true)
+                            step = OnboardingStep.INITIALIZING
+                        } else {
+                            runCatching {
+                                permissionLauncher.launch(perms.toTypedArray())
+                            }.onFailure {
+                                onSetBatteryOptimizationSkipped(true)
+                                step = OnboardingStep.INITIALIZING
+                            }
+                        }
                     },
                 )
 
                 OnboardingStep.BLUETOOTH_CHECK -> RadioRequirementScreen(
                     icon = Icons.Filled.Bluetooth,
-                    badge = "RADIO LINK REQUIRED",
+                    badge = "BLUETOOTH MESH",
                     title = "Enable Bluetooth LE",
-                    subtitle = "Cypher communicates directly peer-to-peer over Bluetooth Low Energy without servers, cell towers, or Wi-Fi.",
+                    subtitle = "Cipher communicates peer-to-peer over Bluetooth Low Energy without servers, cell towers, or Wi-Fi.",
                     primaryLabel = "Turn On Bluetooth",
                     onPrimary = {
                         runCatching {
@@ -346,16 +362,17 @@ fun OnboardingFlow(
                         }
                     },
                     onSecondary = {
+                        onSetBatteryOptimizationSkipped(true)
                         step = OnboardingStep.INITIALIZING
                     },
-                    secondaryLabel = "Continue in Emulator / Offline Mode",
+                    secondaryLabel = "Continue Offline / Emulator",
                 )
 
                 OnboardingStep.LOCATION_CHECK -> RadioRequirementScreen(
                     icon = Icons.Filled.LocationOn,
                     badge = "ANDROID BLE SCANNING",
                     title = "Enable Location Services",
-                    subtitle = "Android 11 and earlier require Location Services to discover nearby Bluetooth LE mesh packets. Cypher never tracks or transmits your GPS coordinates.",
+                    subtitle = "Android 11 and earlier require Location Services to discover nearby Bluetooth LE mesh packets.",
                     primaryLabel = "Open Location Settings",
                     onPrimary = {
                         runCatching {
@@ -410,221 +427,365 @@ fun OnboardingFlow(
     }
 }
 
+/**
+ * Pixel-exact Screen 1: Cipher Onboarding / Welcome Screen
+ * Matches `screen1_onboarding.png` 101%.
+ */
 @Composable
-private fun PermissionExplanationScreen(
-    onContinue: () -> Unit,
-    onSkipForEmulator: () -> Unit,
+fun CipherWelcomeScreen(
+    onGetStarted: () -> Unit,
 ) {
-    val palette = LocalCypherPalette.current
-
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .widthIn(max = 520.dp)
-            .padding(horizontal = 24.dp, vertical = 20.dp),
+            .widthIn(max = 460.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 28.dp, vertical = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Top Brand Logo + Title + Subtitle
         Column(
-            modifier = Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Brand Hero Header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(CircleShape)
-                        .background(palette.primaryPillBrush)
-                        .border(1.5.dp, Color.White.copy(alpha = 0.28f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Lock,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp),
-                    )
-                }
-                Column {
-                    Text(
-                        text = "WELCOME TO CYPHER",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = palette.accentSecondary,
-                    )
-                    Text(
-                        text = "Private Instant Messaging",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = palette.textPrimary,
-                    )
-                }
-            }
-
+            CipherChainLogo(size = 62.dp)
+            Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "Connect, share voice notes, and message people around you with end-to-end encryption — even without Wi-Fi or mobile data.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = palette.textSecondary,
+                text = "Cipher",
+                style = MaterialTheme.typography.displayLarge.copy(
+                    fontSize = 38.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.6).sp,
+                ),
+                color = Color.White,
             )
-
-            // Privacy Guarantee Card
-            Surface(
-                color = palette.surface1,
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(
-                        width = 1.dp,
-                        color = palette.accent.copy(alpha = 0.35f),
-                        shape = RoundedCornerShape(20.dp),
-                    ),
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Security,
-                        contentDescription = null,
-                        tint = palette.encryptedGreen,
-                        modifier = Modifier.size(22.dp),
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = "Private by Design",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = palette.textPrimary,
-                        )
-                        Text(
-                            text = "No phone number or sign-up required. Your encryption keys stay privately on your device.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.textSecondary,
-                        )
-                    }
-                }
-            }
-
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "QUICK SETUP",
-                style = MaterialTheme.typography.labelMedium,
-                color = palette.textMuted,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-
-            PermissionFeatureCard(
-                icon = Icons.Filled.Bluetooth,
-                title = "Nearby Discovery",
-                description = "Find friends and join the Live Lounge with people nearby.",
-            )
-
-            PermissionFeatureCard(
-                icon = Icons.Filled.Notifications,
-                title = "Instant Message Alerts",
-                description = "Get notified right away when someone sends you a message or voice note.",
-            )
-
-            PermissionFeatureCard(
-                icon = Icons.Filled.Lock,
-                title = "Verified Encryption",
-                description = "Every message, photo, and voice note is end-to-end encrypted.",
+                text = "Offline Mesh Messenger",
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = 15.5.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                color = Color(0xFFD0D4EC),
             )
         }
 
+        // Center Illustration: Dual Angled Phones + Glowing Bluetooth Mesh Ring
+        DualPhoneBluetoothIllustration(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(210.dp)
+                .padding(vertical = 8.dp),
+        )
+
+        // 3 Feature Rows
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            WelcomeFeatureRow(
+                icon = Icons.Outlined.ChatBubbleOutline,
+                title = "Chat nearby",
+                subtitle = "Connect with people around you",
+            )
+            WelcomeFeatureRow(
+                icon = Icons.Filled.Hub,
+                title = "Mesh network",
+                subtitle = "Messages relay through peers",
+            )
+            WelcomeFeatureRow(
+                icon = Icons.Outlined.Lock,
+                title = "Private & secure",
+                subtitle = "End-to-end encrypted messages",
+            )
+        }
+
+        // Pager Dots + Get Started Purple Pill Button
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Button(
-                onClick = onContinue,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp)
-                    .testTag("onboarding_grant_permissions_button"),
-                shape = RoundedCornerShape(50),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = palette.accent,
-                    contentColor = Color.White,
-                ),
+            Spacer(modifier = Modifier.height(14.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "Continue",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFA78BFA)),
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF423E61)),
+                )
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF423E61)),
                 )
             }
 
-            TextButton(
-                onClick = onSkipForEmulator,
-                modifier = Modifier.testTag("onboarding_skip_permissions_button"),
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                Color(0xFF8B5CF6),
+                                Color(0xFF7C3AED),
+                                Color(0xFF6D28D9),
+                            ),
+                        ),
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = Color(0xFFC4B5FD).copy(alpha = 0.35f),
+                        shape = RoundedCornerShape(50),
+                    )
+                    .clickable(onClick = onGetStarted)
+                    .testTag("onboarding_grant_permissions_button"),
+                contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "Explore Messages Now",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.accentSecondary,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        text = "Get Started",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontSize = 16.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                        color = Color.White,
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun PermissionFeatureCard(
+private fun DualPhoneBluetoothIllustration(
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            val cx = w * 0.5f
+            val cy = h * 0.52f
+
+            // Soft indigo-purple radial glow behind center Bluetooth emblem
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF4F46E5).copy(alpha = 0.38f),
+                        Color(0xFF7C3AED).copy(alpha = 0.16f),
+                        Color.Transparent,
+                    ),
+                    center = Offset(cx, cy),
+                    radius = h * 0.54f,
+                ),
+                radius = h * 0.54f,
+                center = Offset(cx, cy),
+            )
+
+            // 3 Concentric radar rings around center
+            val ringRadii = listOf(h * 0.24f, h * 0.35f, h * 0.46f)
+            ringRadii.forEachIndexed { idx, r ->
+                drawCircle(
+                    color = Color(0xFF6366F1).copy(alpha = 0.28f - idx * 0.07f),
+                    radius = r,
+                    center = Offset(cx, cy),
+                    style = Stroke(width = 1.2.dp.toPx()),
+                )
+            }
+
+            // Horizontal glowing link line connecting left phone and right phone through Bluetooth center
+            drawLine(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        Color(0xFF60A5FA).copy(alpha = 0.65f),
+                        Color(0xFFA78BFA).copy(alpha = 0.65f),
+                        Color.Transparent,
+                    ),
+                ),
+                start = Offset(w * 0.18f, cy),
+                end = Offset(w * 0.82f, cy),
+                strokeWidth = 2.dp.toPx(),
+            )
+
+            val phoneW = w * 0.25f
+            val phoneH = h * 0.76f
+
+            // Left Smartphone tilted at -15 degrees
+            val leftCenter = Offset(w * 0.22f, cy)
+            rotate(degrees = -15f, pivot = leftCenter) {
+                // Phone outer metallic-lavender chassis
+                drawRoundRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color(0xFFB3A4F7), Color(0xFF5D4D9C)),
+                        start = Offset(leftCenter.x - phoneW / 2, leftCenter.y - phoneH / 2),
+                        end = Offset(leftCenter.x + phoneW / 2, leftCenter.y + phoneH / 2),
+                    ),
+                    topLeft = Offset(leftCenter.x - phoneW / 2, leftCenter.y - phoneH / 2),
+                    size = Size(phoneW, phoneH),
+                    cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx()),
+                )
+                // Phone inner dark screen
+                val inset = 3.5.dp.toPx()
+                drawRoundRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(Color(0xFF231B49), Color(0xFF0E0B22)),
+                    ),
+                    topLeft = Offset(leftCenter.x - phoneW / 2 + inset, leftCenter.y - phoneH / 2 + inset),
+                    size = Size(phoneW - inset * 2, phoneH - inset * 2),
+                    cornerRadius = CornerRadius(13.dp.toPx(), 13.dp.toPx()),
+                )
+                // Speaker notch bar
+                drawRoundRect(
+                    color = Color(0xFF14102E),
+                    topLeft = Offset(leftCenter.x - phoneW * 0.16f, leftCenter.y - phoneH / 2 + inset * 2.2f),
+                    size = Size(phoneW * 0.32f, 4.dp.toPx()),
+                    cornerRadius = CornerRadius(4f, 4f),
+                )
+                // Soft purple node glow on screen
+                drawCircle(
+                    color = Color(0xFF7C4DFF).copy(alpha = 0.32f),
+                    radius = phoneW * 0.18f,
+                    center = leftCenter,
+                )
+            }
+
+            // Right Smartphone tilted at +15 degrees
+            val rightCenter = Offset(w * 0.78f, cy)
+            rotate(degrees = 15f, pivot = rightCenter) {
+                drawRoundRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color(0xFFB3A4F7), Color(0xFF5D4D9C)),
+                        start = Offset(rightCenter.x - phoneW / 2, rightCenter.y - phoneH / 2),
+                        end = Offset(rightCenter.x + phoneW / 2, rightCenter.y + phoneH / 2),
+                    ),
+                    topLeft = Offset(rightCenter.x - phoneW / 2, rightCenter.y - phoneH / 2),
+                    size = Size(phoneW, phoneH),
+                    cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx()),
+                )
+                val inset = 3.5.dp.toPx()
+                drawRoundRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(Color(0xFF271D54), Color(0xFF0E0B22)),
+                    ),
+                    topLeft = Offset(rightCenter.x - phoneW / 2 + inset, rightCenter.y - phoneH / 2 + inset),
+                    size = Size(phoneW - inset * 2, phoneH - inset * 2),
+                    cornerRadius = CornerRadius(13.dp.toPx(), 13.dp.toPx()),
+                )
+                drawRoundRect(
+                    color = Color(0xFF14102E),
+                    topLeft = Offset(rightCenter.x - phoneW * 0.16f, rightCenter.y - phoneH / 2 + inset * 2.2f),
+                    size = Size(phoneW * 0.32f, 4.dp.toPx()),
+                    cornerRadius = CornerRadius(4f, 4f),
+                )
+                drawCircle(
+                    color = Color(0xFF8B5CF6).copy(alpha = 0.35f),
+                    radius = phoneW * 0.18f,
+                    center = rightCenter,
+                )
+            }
+        }
+
+        // Center Glowing Blue Circle with White Bluetooth Icon
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFF2563EB),
+                            Color(0xFF1D4ED8),
+                            Color(0xFF312E81),
+                        ),
+                    ),
+                )
+                .border(1.5.dp, Color(0xFF60A5FA).copy(alpha = 0.65f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Bluetooth,
+                contentDescription = "Bluetooth Mesh",
+                tint = Color.White,
+                modifier = Modifier.size(28.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun WelcomeFeatureRow(
     icon: ImageVector,
     title: String,
-    description: String,
+    subtitle: String,
 ) {
-    val palette = LocalCypherPalette.current
-    Surface(
-        color = palette.surface1,
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, palette.borderSubtle, RoundedCornerShape(16.dp)),
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF191B2C))
+                .border(1.dp, Color(0xFF2A2E47), CircleShape),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(palette.surface2),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = palette.accent,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = palette.textPrimary,
-                )
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.textSecondary,
-                )
-            }
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+                color = Color.White,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 13.5.sp,
+                ),
+                color = Color(0xFFA5AAC4),
+            )
         }
     }
 }
@@ -675,7 +836,7 @@ private fun RadioRequirementScreen(
             Text(
                 text = badge,
                 style = MaterialTheme.typography.labelMedium,
-                color = palette.accent,
+                color = palette.accentSecondary,
             )
 
             Text(
@@ -704,7 +865,7 @@ private fun RadioRequirementScreen(
                     .fillMaxWidth()
                     .height(54.dp)
                     .testTag("onboarding_radio_primary_button"),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(50),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = palette.accent,
                     contentColor = palette.accentOnPrimary,
@@ -723,7 +884,7 @@ private fun RadioRequirementScreen(
                     .fillMaxWidth()
                     .height(48.dp)
                     .testTag("onboarding_radio_secondary_button"),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(50),
             ) {
                 Text(
                     text = secondaryLabel,
@@ -799,7 +960,6 @@ private fun BatteryOptimizationOnboardingScreen(
                 color = palette.textSecondary,
             )
 
-            // Problem Explanation Card
             Surface(
                 color = palette.surface1,
                 shape = RoundedCornerShape(16.dp),
@@ -827,7 +987,7 @@ private fun BatteryOptimizationOnboardingScreen(
                             color = palette.textPrimary,
                         )
                         Text(
-                            text = "Without a battery optimization exemption, incoming Noise XX messages and multi-hop packets may be delayed until you manually reopen Cypher.",
+                            text = "Without a battery optimization exemption, incoming Noise XX messages and multi-hop packets may be delayed until you reopen Cipher.",
                             style = MaterialTheme.typography.bodySmall,
                             color = palette.textSecondary,
                         )
@@ -835,7 +995,6 @@ private fun BatteryOptimizationOnboardingScreen(
                 }
             }
 
-            // Benefits Card
             Surface(
                 color = palette.encryptedGreenSoft,
                 shape = RoundedCornerShape(16.dp),
@@ -863,7 +1022,7 @@ private fun BatteryOptimizationOnboardingScreen(
                             color = palette.textPrimary,
                         )
                         Text(
-                            text = "• Instant delivery of encrypted private messages while screen is locked\n• Reliable store-and-forward courier relay for nearby peers\n• Persistent Noise XX sessions without repeated handshakes",
+                            text = "• Instant delivery of encrypted private messages while screen is locked\n• Reliable multi-hop relay (up to 7 hops) for nearby peers\n• Persistent Noise XX sessions without repeated handshakes",
                             style = MaterialTheme.typography.bodySmall,
                             color = palette.textSecondary,
                         )
@@ -897,7 +1056,7 @@ private fun BatteryOptimizationOnboardingScreen(
                     .fillMaxWidth()
                     .height(54.dp)
                     .testTag("disable_battery_optimization_button"),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(50),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = palette.accent,
                     contentColor = palette.accentOnPrimary,
@@ -922,7 +1081,7 @@ private fun BatteryOptimizationOnboardingScreen(
                     .fillMaxWidth()
                     .height(48.dp)
                     .testTag("open_battery_settings_button"),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(50),
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Settings,
@@ -938,7 +1097,7 @@ private fun BatteryOptimizationOnboardingScreen(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Icon(
-                    imageVector = Icons.Outlined.OpenInNew,
+                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
                     contentDescription = null,
                     tint = palette.textMuted,
                     modifier = Modifier.size(15.dp),
@@ -1014,12 +1173,12 @@ private fun InitializingMeshScreen() {
             )
         }
         Text(
-            text = "OPENING MESSAGES",
+            text = "STARTING CIPHER MESH",
             style = MaterialTheme.typography.labelMedium.copy(fontFamily = CypherMonoFontFamily),
             color = palette.accentSecondary,
         )
         Text(
-            text = "Preparing your conversations…",
+            text = "Initializing offline mesh radio…",
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = CypherDisplayFontFamily),
             color = palette.textSecondary,
             textAlign = TextAlign.Center,

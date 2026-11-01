@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Cypher</string>
-    <string name="mesh_service_title">Cypher Mesh Active</string>
+    <string name="app_name">Cipher</string>
+    <string name="mesh_service_title">Cipher Mesh Active</string>
     <string name="mesh_service_text">Encrypted Bluetooth LE mesh relay is running</string>
-    <string name="mesh_channel_name">Cypher Mesh Relay</string>
+    <string name="mesh_channel_name">Cipher Mesh Relay</string>
     <string name="mesh_channel_desc">Persistent status for the background Bluetooth LE mesh link layer</string>
     <string name="dm_channel_name">Encrypted Direct Messages</string>
     <string name="dm_channel_desc">Alerts for incoming Noise XX encrypted private messages and mentions</string>

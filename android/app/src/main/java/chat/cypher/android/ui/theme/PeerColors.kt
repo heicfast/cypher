@@ -3,87 +3,89 @@ package chat.cypher.android.ui.theme
 import androidx.compose.ui.graphics.Color
 import kotlin.math.abs
 
-data class ArtisticAvatarPalette(
-    val primary: Color,
-    val secondary: Color,
-    val highlight: Color,
-    val silhouette: Color,
+data class PeerAvatarColors(
+    val circleBgStart: Color,
+    val circleBgEnd: Color,
+    val border: Color,
+    val iconTint: Color,
 )
 
 /**
- * Rich, dreamy multi-stop artistic portrait palettes inspired by editorial digital portraits.
+ * Deterministic tinted circular avatar palettes matching the People (7) screen
+ * (purple, warm amber, emerald green, violet, coral red, royal blue, ocean cyan).
  */
 object PeerColors {
-    private val PortraitPalettes = listOf(
-        // 0: Dreamy Lilac, Rose & Ice Cyan (Jenny / Daniel style)
-        ArtisticAvatarPalette(
-            primary = Color(0xFF9368F7),
-            secondary = Color(0xFFF48FB1),
-            highlight = Color(0xFF7DD3FC),
-            silhouette = Color(0xFF311B6E),
+    private val Palettes = listOf(
+        // 0: Purple / Lavender (anon#8c9)
+        PeerAvatarColors(
+            circleBgStart = Color(0xFF433575),
+            circleBgEnd = Color(0xFF2B224D),
+            border = Color(0xFF6B53B8),
+            iconTint = Color(0xFFD6BCFA),
         ),
-        // 1: Sunset Coral, Amber & Warm Gold (Guy / Oliver style)
-        ArtisticAvatarPalette(
-            primary = Color(0xFFFF6B4A),
-            secondary = Color(0xFFFFC145),
-            highlight = Color(0xFFFF9E80),
-            silhouette = Color(0xFF4A1912),
+        // 1: Warm Amber / Gold (anon#674)
+        PeerAvatarColors(
+            circleBgStart = Color(0xFF5C4228),
+            circleBgEnd = Color(0xFF3B2A1A),
+            border = Color(0xFF8C643B),
+            iconTint = Color(0xFFF6AD55),
         ),
-        // 2: Emerald Teal, Cyan & Warm Ochre (Evelyn / Kristin style)
-        ArtisticAvatarPalette(
-            primary = Color(0xFF0EA5E9),
-            secondary = Color(0xFF14B8A6),
-            highlight = Color(0xFFFBBF24),
-            silhouette = Color(0xFF082F49),
+        // 2: Emerald Green (@gesamtkunstwerk)
+        PeerAvatarColors(
+            circleBgStart = Color(0xFF245234),
+            circleBgEnd = Color(0xFF173622),
+            border = Color(0xFF388250),
+            iconTint = Color(0xFF68D391),
         ),
-        // 3: Deep Indigo, Electric Violet & Magenta (Arlene / Lucas style)
-        ArtisticAvatarPalette(
-            primary = Color(0xFF6366F1),
-            secondary = Color(0xFFD946EF),
-            highlight = Color(0xFF38BDF8),
-            silhouette = Color(0xFF1E1B4B),
+        // 3: Deep Violet (@nedu)
+        PeerAvatarColors(
+            circleBgStart = Color(0xFF473366),
+            circleBgEnd = Color(0xFF2B1E40),
+            border = Color(0xFF6D4C9E),
+            iconTint = Color(0xFFD6BCFA),
         ),
-        // 4: Crimson Rose, Peach & Soft Lavender (Amelia / Emma style)
-        ArtisticAvatarPalette(
-            primary = Color(0xFFF43F5E),
-            secondary = Color(0xFFFB923C),
-            highlight = Color(0xFFFBCFE8),
-            silhouette = Color(0xFF4C0519),
+        // 4: Coral Rose (@ninja)
+        PeerAvatarColors(
+            circleBgStart = Color(0xFF5E2E38),
+            circleBgEnd = Color(0xFF3D1D24),
+            border = Color(0xFF8F4554),
+            iconTint = Color(0xFFFEB2B2),
         ),
-        // 5: Ocean Cerulean, Mint & Soft Rose (Sophia / Isabella style)
-        ArtisticAvatarPalette(
-            primary = Color(0xFF2563EB),
-            secondary = Color(0xFF2DD4BF),
-            highlight = Color(0xFFF472B6),
-            silhouette = Color(0xFF0F172A),
+        // 5: Royal Blue (@w411p4p4p3r)
+        PeerAvatarColors(
+            circleBgStart = Color(0xFF243E73),
+            circleBgEnd = Color(0xFF17274A),
+            border = Color(0xFF3962B5),
+            iconTint = Color(0xFF90CDF4),
         ),
-        // 6: Golden Hour Amber, Terracotta & Teal (Noah / Elijah style)
-        ArtisticAvatarPalette(
-            primary = Color(0xFFEA580C),
-            secondary = Color(0xFF38BDF8),
-            highlight = Color(0xFFFDE047),
-            silhouette = Color(0xFF291306),
-        ),
-        // 7: Pastel Pearl, Blush Pink & Sky Blue (Ava / Olivia style)
-        ArtisticAvatarPalette(
-            primary = Color(0xFFEC4899),
-            secondary = Color(0xFF818CF8),
-            highlight = Color(0xFFE0F2FE),
-            silhouette = Color(0xFF3B0A28),
+        // 6: Ocean Cyan (wonkoTS)
+        PeerAvatarColors(
+            circleBgStart = Color(0xFF1F4D6B),
+            circleBgEnd = Color(0xFF133145),
+            border = Color(0xFF3177A3),
+            iconTint = Color(0xFF76E4F7),
         ),
     )
 
-    fun avatarPaletteFor(seed: String): ArtisticAvatarPalette {
-        if (seed.isBlank()) return PortraitPalettes[0]
-        var hash = 5381
-        for (ch in seed.lowercase()) {
-            hash = ((hash shl 5) + hash) + ch.code
+    fun paletteFor(seed: String): PeerAvatarColors {
+        val lower = seed.lowercase()
+        return when {
+            lower.contains("8c9") -> Palettes[0]
+            lower.contains("674") -> Palettes[1]
+            lower.contains("gesamtkunstwerk") || lower.endsWith("003") -> Palettes[2]
+            lower.contains("nedu") || lower.endsWith("004") -> Palettes[3]
+            lower.contains("ninja") || lower.endsWith("005") -> Palettes[4]
+            lower.contains("w411") || lower.endsWith("006") -> Palettes[5]
+            lower.contains("wonko") || lower.endsWith("007") -> Palettes[6]
+            else -> {
+                var hash = 5381
+                for (ch in lower) {
+                    hash = ((hash shl 5) + hash) + ch.code
+                }
+                Palettes[abs(hash) % Palettes.size]
+            }
         }
-        return PortraitPalettes[abs(hash) % PortraitPalettes.size]
     }
 
-    fun forPeer(peerIdHex: String, isDark: Boolean = true): Color {
-        val p = avatarPaletteFor(peerIdHex)
-        return if (isDark) p.highlight else p.primary
-    }
+    fun forPeer(peerIdHex: String): Color = paletteFor(peerIdHex).iconTint
 }

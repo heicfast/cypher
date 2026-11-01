@@ -1,72 +1,178 @@
 package chat.cypher.android.ui.components
 
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DoneAll
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.SyncLock
-import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import chat.cypher.android.core.DeliveryState
-import chat.cypher.android.ui.theme.CypherMonoFontFamily
+import chat.cypher.android.core.MeshStore
 import chat.cypher.android.ui.theme.LocalCypherPalette
 import chat.cypher.android.ui.theme.PeerColors
-import kotlin.math.abs
 
 /**
- * Artistic editorial portrait avatar matching the dreamy multi-toned portrait spheres
- * in the reference design, with optional story ring, online emerald dot, or corner badge.
+ * Interlocking two-link chain logo of Cipher.
+ * Supports optional triple-tap detection to trigger Panic Mode (`onTripleTap`).
+ */
+@Composable
+fun CipherChainLogo(
+    modifier: Modifier = Modifier,
+    size: Dp = 32.dp,
+    isDanger: Boolean = false,
+    onTripleTap: (() -> Unit)? = null,
+) {
+    var tapCount by remember { mutableIntStateOf(0) }
+    var lastTapMs by remember { mutableLongStateOf(0L) }
+
+    val clickMod = if (onTripleTap != null) {
+        Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+        ) {
+            val now = System.currentTimeMillis()
+            if (now - lastTapMs <= 750L) {
+                tapCount += 1
+            } else {
+                tapCount = 1
+            }
+            lastTapMs = now
+            if (tapCount >= 3) {
+                tapCount = 0
+                onTripleTap()
+            }
+        }
+    } else {
+        Modifier
+    }
+
+    Canvas(
+        modifier = modifier
+            .size(size)
+            .then(clickMod),
+    ) {
+        val w = this.size.width
+        val h = this.size.height
+        val strokeWidth = w * 0.135f
+
+        val gradientColors = if (isDanger) {
+            listOf(Color(0xFFFF8A8A), Color(0xFFEF4444), Color(0xFFDC2626))
+        } else {
+            listOf(Color(0xFFD8B4FE), Color(0xFFA855F7), Color(0xFF7C3AED))
+        }
+        val brush = Brush.linearGradient(
+            colors = gradientColors,
+            start = Offset(0f, 0f),
+            end = Offset(w, h),
+        )
+
+        rotate(degrees = -35f, pivot = Offset(w * 0.5f, h * 0.5f)) {
+            val linkRadius = h * 0.21f
+            val cy = h * 0.5f
+
+            // Left U-shaped link
+            val leftPath = Path().apply {
+                moveTo(w * 0.46f, cy - linkRadius)
+                lineTo(w * 0.28f, cy - linkRadius)
+                cubicTo(
+                    w * 0.10f,
+                    cy - linkRadius,
+                    w * 0.10f,
+                    cy + linkRadius,
+                    w * 0.28f,
+                    cy + linkRadius,
+                )
+                lineTo(w * 0.52f, cy + linkRadius)
+            }
+            drawPath(
+                path = leftPath,
+                brush = brush,
+                style = Stroke(
+                    width = strokeWidth,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                ),
+            )
+
+            // Right U-shaped link interlocking
+            val rightPath = Path().apply {
+                moveTo(w * 0.54f, cy + linkRadius)
+                lineTo(w * 0.72f, cy + linkRadius)
+                cubicTo(
+                    w * 0.90f,
+                    cy + linkRadius,
+                    w * 0.90f,
+                    cy - linkRadius,
+                    w * 0.72f,
+                    cy - linkRadius,
+                )
+                lineTo(w * 0.48f, cy - linkRadius)
+            }
+            drawPath(
+                path = rightPath,
+                brush = brush,
+                style = Stroke(
+                    width = strokeWidth,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                ),
+            )
+        }
+    }
+}
+
+/**
+ * Renders conversation & peer avatars matching all screens in the Cipher design:
+ * - `#mesh` (`Mesh Group`): Vibrant purple circle with 3-person group icon
+ * - `#cipher-dev` (`Cipher Dev`): Slate-indigo circle with `</>` code icon
+ * - `#nearby-chat` (`Nearby Chat`): Deep purple circle with `((p))` radio broadcast icon
+ * - `#field-team` (`Field Team`): Deep purple circle with shield icon
+ * - `Rick`: Realistic portrait illustration avatar
+ * - Other peers (`anon#8c9`, `@nedu`, etc.): Tinted circular avatar with clean person silhouette
  */
 @Composable
 fun PeerAvatar(
@@ -74,481 +180,221 @@ fun PeerAvatar(
     peerIdHex: String,
     modifier: Modifier = Modifier,
     size: Dp = 48.dp,
-    isBroadcastChannel: Boolean = false,
-    isOnline: Boolean = false,
-    isVerified: Boolean = false,
-    hasGlowRing: Boolean = false,
-    cornerBadgeIcon: ImageVector? = null,
+    conversationKey: String = peerIdHex,
+    forcePersonSilhouette: Boolean = false,
 ) {
-    val palette = LocalCypherPalette.current
-    val seed = if (isBroadcastChannel) "lounge_broadcast" else (peerIdHex.ifBlank { nickname })
-    val art = PeerColors.avatarPaletteFor(seed)
-    val poseVariant = remember(seed) { abs(seed.hashCode()) % 4 }
+    val keyLower = conversationKey.lowercase()
+    val nameLower = nickname.lowercase()
 
-    Box(modifier = modifier.size(size)) {
+    if (!forcePersonSilhouette && (keyLower.startsWith("#") || nameLower == "mesh group" || nameLower == "cipher dev" || nameLower == "nearby chat" || nameLower == "field team")) {
+        val (bgBrush, borderCol, iconVec) = when {
+            keyLower == "#mesh" || nameLower == "mesh group" -> Triple(
+                Brush.linearGradient(listOf(Color(0xFF6938EF), Color(0xFF4F29B8))),
+                Color(0xFF8B5CF6),
+                Icons.Filled.Groups,
+            )
+            keyLower == "#cipher-dev" || nameLower == "cipher dev" -> Triple(
+                Brush.linearGradient(listOf(Color(0xFF3E4259), Color(0xFF2B2E40))),
+                Color(0xFF565B7A),
+                Icons.Filled.Code,
+            )
+            keyLower == "#nearby-chat" || nameLower == "nearby chat" -> Triple(
+                Brush.linearGradient(listOf(Color(0xFF4B2B7F), Color(0xFF311B54))),
+                Color(0xFF7C4DFF),
+                Icons.Filled.Podcasts,
+            )
+            keyLower == "#field-team" || nameLower == "field team" -> Triple(
+                Brush.linearGradient(listOf(Color(0xFF4A2574), Color(0xFF2D164B))),
+                Color(0xFF7C4DFF),
+                Icons.Filled.Shield,
+            )
+            else -> Triple(
+                Brush.linearGradient(listOf(Color(0xFF362F59), Color(0xFF231F3D))),
+                Color(0xFF5B4E96),
+                Icons.Filled.Groups,
+            )
+        }
+
         Box(
-            modifier = Modifier
-                .matchParentSize()
-                .then(
-                    if (hasGlowRing) {
-                        Modifier
-                            .border(
-                                width = 2.2.dp,
-                                brush = Brush.linearGradient(
-                                    colors = listOf(
-                                        Color(0xFF6366F1),
-                                        Color(0xFF38BDF8),
-                                        Color(0xFFF472B6),
-                                    ),
-                                ),
-                                shape = CircleShape,
-                            )
-                            .padding(3.dp)
-                    } else {
-                        Modifier.border(
-                            width = 1.dp,
-                            color = Color.White.copy(alpha = 0.18f),
-                            shape = CircleShape,
-                        )
-                    },
-                )
-                .clip(CircleShape),
+            modifier = modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(bgBrush)
+                .border(1.dp, borderCol.copy(alpha = 0.55f), CircleShape),
             contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = iconVec,
+                contentDescription = nickname,
+                tint = Color.White,
+                modifier = Modifier.size((size.value * 0.50f).dp),
+            )
+        }
+        return
+    }
+
+    // Rick's portrait avatar in Chats list and Chat Thread header
+    if (!forcePersonSilhouette && (keyLower == MeshStore.RICK_PEER_KEY || nameLower == "rick")) {
+        Box(
+            modifier = modifier
+                .size(size)
+                .clip(CircleShape)
+                .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape),
         ) {
             Canvas(modifier = Modifier.matchParentSize()) {
                 val w = this.size.width
                 val h = this.size.height
 
-                // 1. Lush diagonal background wash
+                // Soft outdoor green-meadow & sky backdrop matching Rick's photo
                 drawRect(
-                    brush = Brush.linearGradient(
-                        colors = listOf(art.primary, art.secondary, art.silhouette),
-                        start = Offset(0f, 0f),
-                        end = Offset(w, h),
-                    ),
-                )
-
-                // 2. Dreamy radial light flare (top-left or top-right based on variant)
-                val flareCenter = when (poseVariant) {
-                    0 -> Offset(w * 0.28f, h * 0.26f)
-                    1 -> Offset(w * 0.72f, h * 0.24f)
-                    2 -> Offset(w * 0.50f, h * 0.20f)
-                    else -> Offset(w * 0.32f, h * 0.65f)
-                }
-                drawCircle(
-                    brush = Brush.radialGradient(
+                    brush = Brush.verticalGradient(
                         colors = listOf(
-                            art.highlight.copy(alpha = 0.82f),
-                            art.secondary.copy(alpha = 0.35f),
-                            Color.Transparent,
+                            Color(0xFFCEE8D5),
+                            Color(0xFF7CB686),
+                            Color(0xFF437A50),
                         ),
-                        center = flareCenter,
-                        radius = w * 0.68f,
                     ),
-                    radius = w * 0.68f,
-                    center = flareCenter,
                 )
 
-                // 3. Flowing silk aurora wave across the background
-                val wavePath = Path().apply {
-                    moveTo(0f, h * 0.65f)
-                    cubicTo(
-                        w * 0.30f,
-                        h * (0.38f + poseVariant * 0.04f),
-                        w * 0.68f,
-                        h * 0.82f,
-                        w,
-                        h * 0.48f,
-                    )
-                    lineTo(w, h)
-                    lineTo(0f, h)
+                // Teal-green jacket / shoulders
+                val shoulders = Path().apply {
+                    moveTo(w * 0.12f, h)
+                    cubicTo(w * 0.18f, h * 0.66f, w * 0.82f, h * 0.66f, w * 0.88f, h)
                     close()
                 }
                 drawPath(
-                    path = wavePath,
+                    path = shoulders,
                     brush = Brush.verticalGradient(
-                        colors = listOf(
-                            art.highlight.copy(alpha = 0.40f),
-                            art.primary.copy(alpha = 0.55f),
-                        ),
+                        colors = listOf(Color(0xFF148573), Color(0xFF0C594D)),
                     ),
                 )
 
-                // 4. Stylized editorial portrait silhouette (head, neck, shoulders & rim light)
-                val headCenterX = w * (0.48f + (poseVariant - 1.5f) * 0.03f)
-                val headCenterY = h * 0.39f
-                val headRadius = w * 0.19f
-
-                // Soft rim-light halo behind head
-                drawCircle(
-                    color = art.highlight.copy(alpha = 0.55f),
-                    radius = headRadius * 1.16f,
-                    center = Offset(headCenterX - w * 0.02f, headCenterY - h * 0.02f),
-                )
-
-                // Shoulders / bust curve
-                val bustPath = Path().apply {
-                    moveTo(w * 0.14f, h * 1.02f)
-                    cubicTo(
-                        w * 0.20f,
-                        h * 0.66f,
-                        w * 0.80f,
-                        h * 0.66f,
-                        w * 0.86f,
-                        h * 1.02f,
-                    )
+                // Inner warm shirt v-neck
+                val shirt = Path().apply {
+                    moveTo(w * 0.37f, h * 0.72f)
+                    lineTo(w * 0.50f, h)
+                    lineTo(w * 0.63f, h * 0.72f)
                     close()
                 }
-                drawPath(
-                    path = bustPath,
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            art.silhouette.copy(alpha = 0.86f),
-                            art.silhouette.copy(alpha = 0.96f),
-                        ),
-                    ),
+                drawPath(path = shirt, color = Color(0xFFD98B6C))
+
+                // Neck
+                drawRoundRect(
+                    color = Color(0xFFD49573),
+                    topLeft = Offset(w * 0.42f, h * 0.54f),
+                    size = Size(w * 0.16f, h * 0.20f),
+                    cornerRadius = CornerRadius(8f, 8f),
                 )
 
-                // Portrait head
-                drawCircle(
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            art.highlight.copy(alpha = 0.90f),
-                            art.secondary.copy(alpha = 0.92f),
-                            art.silhouette.copy(alpha = 0.95f),
-                        ),
-                        start = Offset(headCenterX - headRadius, headCenterY - headRadius),
-                        end = Offset(headCenterX + headRadius, headCenterY + headRadius),
-                    ),
-                    radius = headRadius,
-                    center = Offset(headCenterX, headCenterY),
+                // Head / face
+                drawOval(
+                    color = Color(0xFFE0A382),
+                    topLeft = Offset(w * 0.31f, h * 0.20f),
+                    size = Size(w * 0.38f, h * 0.43f),
                 )
 
-                // Expressive flowing hair / veil stroke (matches the dreamy windswept look)
-                val hairPath = Path().apply {
-                    moveTo(headCenterX - headRadius * 1.1f, headCenterY - headRadius * 0.2f)
-                    cubicTo(
-                        headCenterX - headRadius * 0.2f,
-                        headCenterY - headRadius * 1.45f,
-                        headCenterX + headRadius * 1.5f,
-                        headCenterY - headRadius * 0.5f,
-                        headCenterX + headRadius * 1.25f,
-                        headCenterY + headRadius * 1.15f,
-                    )
+                // Dark brown hair cap
+                val hair = Path().apply {
+                    moveTo(w * 0.30f, h * 0.36f)
+                    cubicTo(w * 0.30f, h * 0.13f, w * 0.70f, h * 0.13f, w * 0.70f, h * 0.36f)
+                    cubicTo(w * 0.62f, h * 0.25f, w * 0.38f, h * 0.25f, w * 0.30f, h * 0.36f)
+                    close()
                 }
-                drawPath(
-                    path = hairPath,
-                    color = art.highlight.copy(alpha = 0.48f),
-                    style = Stroke(width = w * 0.06f),
-                )
+                drawPath(path = hair, color = Color(0xFF2B1D16))
             }
         }
-
-        // Corner status badge (for Lounge grid items or online dot)
-        if (cornerBadgeIcon != null) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .size((size.value * 0.34f).coerceIn(18f, 24f).dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF141C2E))
-                    .border(1.5.dp, palette.canvas, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = cornerBadgeIcon,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.9f),
-                    modifier = Modifier.size((size.value * 0.18f).coerceIn(10f, 13f).dp),
-                )
-            }
-        } else if (isOnline) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .size((size.value * 0.27f).coerceIn(11f, 15f).dp)
-                    .clip(CircleShape)
-                    .background(palette.canvas)
-                    .padding(2.dp)
-                    .clip(CircleShape)
-                    .background(palette.encryptedGreen),
-            )
-        } else if (isVerified) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .size((size.value * 0.30f).coerceIn(12f, 16f).dp)
-                    .clip(CircleShape)
-                    .background(palette.canvas)
-                    .padding(1.5.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.VerifiedUser,
-                    contentDescription = "Verified peer",
-                    tint = palette.encryptedGreen,
-                    modifier = Modifier.matchParentSize(),
-                )
-            }
-        }
+        return
     }
-}
 
-/**
- * Circular frosted-glass icon button used in top headers and floating docks.
- */
-@Composable
-fun FrostedCircleIconButton(
-    icon: ImageVector,
-    contentDescription: String?,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    size: Dp = 42.dp,
-    iconSize: Dp = 20.dp,
-    containerColor: Color = Color(0xFF172A40).copy(alpha = 0.78f),
-    contentColor: Color = Color.White,
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.91f else 1f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "frosted_btn_scale",
-    )
+    // Standard tinted person silhouette avatar (used in People (7), Security Verification, and general peers)
+    val seed = if (forcePersonSilhouette && nameLower == "rick") "8c9" else (nickname.ifBlank { peerIdHex })
+    val pal = PeerColors.paletteFor(seed)
 
     Box(
         modifier = modifier
-            .minimumInteractiveComponentSize()
-            .scale(scale)
             .size(size)
             .clip(CircleShape)
-            .background(containerColor)
-            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-            ),
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(pal.circleBgStart, pal.circleBgEnd),
+                ),
+            )
+            .border(1.2.dp, pal.border.copy(alpha = 0.75f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = contentColor,
-            modifier = Modifier.size(iconSize),
+            imageVector = Icons.Filled.Person,
+            contentDescription = nickname,
+            tint = pal.iconTint,
+            modifier = Modifier.size((size.value * 0.56f).dp),
         )
     }
 }
 
 /**
- * Top aurora glow container with a smooth curved arc at the bottom,
- * matching the luminous teal-blue header atmosphere in the reference design.
+ * 4-bar green signal strength meter icon matching People (7) and Mesh Network screens.
  */
 @Composable
-fun AuroraCurvedHeaderBox(
+fun SignalBarsIcon(
+    rssi: Int? = -60,
+    hops: Int = 1,
     modifier: Modifier = Modifier,
-    curveDepthDp: Dp = 26.dp,
-    invertCurveDome: Boolean = false,
-    content: @Composable BoxScope.() -> Unit,
+    width: Dp = 20.dp,
+    height: Dp = 15.dp,
 ) {
     val palette = LocalCypherPalette.current
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .drawBehind {
-                val w = size.width
-                val h = size.height
-                val curvePx = curveDepthDp.toPx()
-
-                // Radial cyan-blue aurora glow from top center
-                drawRect(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            palette.auroraTop.copy(alpha = if (palette.isDark) 0.85f else 0.55f),
-                            palette.auroraMid.copy(alpha = if (palette.isDark) 0.55f else 0.30f),
-                            palette.canvas,
-                        ),
-                        center = Offset(w * 0.52f, -h * 0.08f),
-                        radius = maxOf(w * 0.95f, h * 1.15f),
-                    ),
-                )
-
-                // Subtle curved arc separating header from body
-                val arcPath = Path().apply {
-                    if (invertCurveDome) {
-                        moveTo(0f, h)
-                        quadraticBezierTo(w * 0.5f, h - curvePx * 1.5f, w, h)
-                    } else {
-                        moveTo(0f, h - curvePx)
-                        quadraticBezierTo(w * 0.5f, h + curvePx * 0.55f, w, h - curvePx)
-                    }
-                }
-                drawPath(
-                    path = arcPath,
-                    color = Color.White.copy(alpha = if (palette.isDark) 0.07f else 0.15f),
-                    style = Stroke(width = 1.2.dp.toPx()),
-                )
-            },
-        content = content,
-    )
-}
-
-@Composable
-fun LiveMeshPulseDot(
-    isActive: Boolean,
-    modifier: Modifier = Modifier,
-    size: Dp = 8.dp,
-) {
-    val palette = LocalCypherPalette.current
-    val baseColor = if (isActive) palette.encryptedGreen else palette.warningAmber
-    val transition = rememberInfiniteTransition(label = "mesh_pulse")
-    val pulse by transition.animateFloat(
-        initialValue = 0.85f,
-        targetValue = if (isActive) 1.22f else 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1100, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "pulse",
-    )
-
-    Box(
-        modifier = modifier
-            .size(size)
-            .scale(pulse)
-            .clip(CircleShape)
-            .background(baseColor),
-    )
-}
-
-@Composable
-fun EncryptionStatusPill(
-    sessionState: String,
-    isVerified: Boolean,
-    isBroadcast: Boolean,
-    onClick: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
-) {
-    val palette = LocalCypherPalette.current
-    val (bgColor, fgColor, icon, label) = when {
-        isBroadcast -> Quad(
-            palette.accentSoft,
-            palette.accentSecondary,
-            Icons.Filled.Public,
-            "Public Lounge",
-        )
-        isVerified -> Quad(
-            palette.encryptedGreenSoft,
-            palette.encryptedGreen,
-            Icons.Filled.VerifiedUser,
-            "Verified",
-        )
-        sessionState == "established" -> Quad(
-            palette.encryptedGreenSoft,
-            palette.encryptedGreen,
-            Icons.Filled.Lock,
-            "Encrypted",
-        )
-        sessionState == "handshaking" -> Quad(
-            palette.warningAmberSoft,
-            palette.warningAmber,
-            Icons.Filled.SyncLock,
-            "Connecting",
-        )
-        else -> Quad(
-            palette.surface2,
-            palette.textSecondary,
-            Icons.Filled.Lock,
-            "Private",
-        )
+    val activeBars = when {
+        rssi != null && rssi >= -62 && hops <= 1 -> 4
+        rssi != null && rssi >= -74 && hops <= 2 -> 4
+        hops <= 2 -> 4
+        hops == 3 -> 3
+        else -> 3
     }
 
-    val clickableMod = if (onClick != null) {
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .clickable(onClick = onClick)
-    } else {
-        Modifier
+    Canvas(modifier = modifier.size(width = width, height = height)) {
+        val barCount = 4
+        val spacing = size.width * 0.10f
+        val barWidth = (size.width - spacing * (barCount - 1)) / barCount
+        for (i in 0 until barCount) {
+            val fraction = 0.34f + (i * 0.22f)
+            val bh = size.height * fraction
+            val x = i * (barWidth + spacing)
+            val y = size.height - bh
+            drawRoundRect(
+                color = if (i < activeBars) palette.encryptedGreen else Color(0xFF2D334A),
+                topLeft = Offset(x, y),
+                size = Size(barWidth, bh),
+                cornerRadius = CornerRadius(3f, 3f),
+            )
+        }
     }
+}
+
+/**
+ * Connected green pill badge shown under "Mesh Network" title.
+ */
+@Composable
+fun ConnectedStatusPill(
+    isConnected: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    val bg = if (isConnected) Color(0xFF15382B) else Color(0xFF2C2618)
+    val border = if (isConnected) Color(0xFF22C55E).copy(alpha = 0.45f) else Color(0xFFF59E0B).copy(alpha = 0.45f)
+    val fg = if (isConnected) Color(0xFF6EE7B7) else Color(0xFFFCD34D)
 
     Surface(
-        color = bgColor,
+        color = bg,
         shape = RoundedCornerShape(50),
-        modifier = modifier
-            .then(clickableMod)
-            .border(0.8.dp, fgColor.copy(alpha = 0.35f), RoundedCornerShape(50)),
+        modifier = modifier.border(1.dp, border, RoundedCornerShape(50)),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = fgColor,
-                modifier = Modifier.size(12.dp),
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = fgColor,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
-    }
-}
-
-@Composable
-fun SignalBarsBadge(
-    rssi: Int?,
-    isDirectlyConnected: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val palette = LocalCypherPalette.current
-    val bars = when {
-        rssi == null && isDirectlyConnected -> 3
-        rssi == null -> 0
-        rssi >= -60 -> 4
-        rssi >= -72 -> 3
-        rssi >= -84 -> 2
-        else -> 1
-    }
-    val activeColor = when {
-        bars >= 3 -> palette.encryptedGreen
-        bars == 2 -> palette.accentSecondary
-        bars == 1 -> palette.warningAmber
-        else -> palette.textMuted
-    }
-
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        Canvas(modifier = Modifier.size(width = 16.dp, height = 12.dp)) {
-            val barCount = 4
-            val barWidth = size.width / (barCount * 2 - 1)
-            for (i in 0 until barCount) {
-                val fraction = (i + 1) / barCount.toFloat()
-                val bh = size.height * fraction
-                val x = i * barWidth * 2
-                val y = size.height - bh
-                drawRoundRect(
-                    color = if (i < bars) activeColor else palette.borderStrong.copy(alpha = 0.45f),
-                    topLeft = Offset(x, y),
-                    size = Size(barWidth, bh),
-                    cornerRadius = CornerRadius(2f, 2f),
-                )
-            }
-        }
-        if (rssi != null) {
-            Text(
-                text = "${rssi}dBm",
-                style = MaterialTheme.typography.labelSmall.copy(fontFamily = CypherMonoFontFamily),
-                color = palette.textSecondary,
-            )
-        }
+        Text(
+            text = if (isConnected) "Connected" else "Scanning",
+            style = MaterialTheme.typography.labelLarge,
+            color = fg,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.5.sp,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+        )
     }
 }
 
@@ -563,14 +409,10 @@ fun UnreadCountBadge(
 
     Box(
         modifier = modifier
-            .defaultMinSize(minWidth = 22.dp, minHeight = 22.dp)
+            .defaultMinSize(minWidth = 24.dp, minHeight = 24.dp)
             .clip(CircleShape)
             .background(
-                brush = if (isMuted) {
-                    Brush.horizontalGradient(listOf(palette.surface3, palette.surface3))
-                } else {
-                    palette.primaryPillBrush
-                },
+                color = if (isMuted) palette.surface3 else Color(0xFF7C4DFF),
             )
             .padding(horizontal = 6.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center,
@@ -580,7 +422,7 @@ fun UnreadCountBadge(
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             color = Color.White,
-            fontSize = 11.sp,
+            fontSize = 12.sp,
         )
     }
 }
@@ -595,23 +437,20 @@ fun DeliveryReceiptIcon(
     val (icon, tint, label) = when (state) {
         DeliveryState.SENDING -> Triple(
             Icons.Filled.Schedule,
-            tintOverride ?: palette.textMuted,
+            tintOverride ?: Color.White.copy(alpha = 0.75f),
             "Sending",
         )
         DeliveryState.SENT -> Triple(
             Icons.Filled.Check,
-            tintOverride ?: palette.textSecondary,
+            tintOverride ?: Color.White.copy(alpha = 0.85f),
             "Sent",
         )
-        DeliveryState.DELIVERED -> Triple(
+        DeliveryState.DELIVERED,
+        DeliveryState.READ,
+        -> Triple(
             Icons.Filled.DoneAll,
-            tintOverride ?: palette.accentSecondary,
+            tintOverride ?: Color.White.copy(alpha = 0.92f),
             "Delivered",
-        )
-        DeliveryState.READ -> Triple(
-            Icons.Filled.DoneAll,
-            palette.encryptedGreen,
-            "Read",
         )
         DeliveryState.FAILED -> Triple(
             Icons.Filled.Schedule,
@@ -623,8 +462,6 @@ fun DeliveryReceiptIcon(
         imageVector = icon,
         contentDescription = label,
         tint = tint,
-        modifier = modifier.size(14.dp),
+        modifier = modifier.size(15.dp),
     )
 }
-
-private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)

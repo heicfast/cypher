@@ -251,7 +251,7 @@ fun ChatThread(
     val listState = rememberLazyListState()
 
     LaunchedEffect(conversationKey, messages.size) {
-        MeshStore.markConversationRead(conversationKey)
+        MeshController.markConversationReadAndNotify(conversationKey)
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.lastIndex)
         }
@@ -992,7 +992,7 @@ fun ChatThread(
     if (previewImagePath != null) {
         val path = previewImagePath!!
         val bmp = remember(path) {
-            runCatching { BitmapFactory.decodeFile(path) }.getOrNull()
+            decodeChatBitmap(context, path, maxDim = 1280)
         }
         AlertDialog(
             onDismissRequest = { previewImagePath = null },
@@ -1535,23 +1535,19 @@ private fun CipherMessageBubbleItem(
                     }
 
                     MessageKind.IMAGE -> {
+                        val context = LocalContext.current
                         val bitmap = remember(message.attachmentPath) {
-                            val path = message.attachmentPath
-                            if (!path.isNullOrBlank() && File(path).exists()) {
-                                runCatching { BitmapFactory.decodeFile(path) }.getOrNull()
-                            } else {
-                                null
-                            }
+                            decodeChatBitmap(context, message.attachmentPath, maxDim = 720)
                         }
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (bitmap != null) {
                                 Image(
                                     bitmap = bitmap.asImageBitmap(),
-                                    contentDescription = message.text,
+                                    contentDescription = message.text.ifBlank { "Image attachment" },
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(150.dp)
+                                        .height(172.dp)
                                         .clip(RoundedCornerShape(12.dp)),
                                 )
                             }
@@ -1566,7 +1562,7 @@ private fun CipherMessageBubbleItem(
                                     modifier = Modifier.size(18.dp),
                                 )
                                 Text(
-                                    text = message.attachmentMeta ?: message.text,
+                                    text = (message.attachmentMeta ?: message.text).ifBlank { "📷 Photo" },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color.White,
                                 )
@@ -1595,7 +1591,7 @@ private fun CipherMessageBubbleItem(
                             }
                             Column {
                                 Text(
-                                    text = message.text,
+                                    text = message.text.ifBlank { "📎 File attachment" },
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         fontWeight = FontWeight.Medium,
                                     ),
@@ -1613,13 +1609,24 @@ private fun CipherMessageBubbleItem(
                     }
 
                     else -> {
+                        val visibleText = message.text.ifBlank {
+                            message.attachmentMeta?.takeIf { it.isNotBlank() } ?: "Message"
+                        }
+                        val isJumboEmoji = remember(visibleText) { isEmojiOnlyMessage(visibleText) }
                         Text(
-                            text = message.text,
-                            style = MaterialTheme.typography.bodyLarge.copy(
-                                fontSize = 14.5.sp,
-                                lineHeight = 20.sp,
-                            ),
-                            color = palette.textPrimary,
+                            text = visibleText,
+                            style = if (isJumboEmoji) {
+                                MaterialTheme.typography.headlineMedium.copy(
+                                    fontSize = 28.sp,
+                                    lineHeight = 34.sp,
+                                )
+                            } else {
+                                MaterialTheme.typography.bodyLarge.copy(
+                                    fontSize = 14.5.sp,
+                                    lineHeight = 20.sp,
+                                )
+                            },
+                            color = Color.White,
                         )
                     }
                 }
@@ -1653,10 +1660,15 @@ private fun CipherMessageBubbleItem(
                             DeliveryStatus.SENT -> Icons.Rounded.Done
                             DeliveryStatus.DELIVERED, DeliveryStatus.READ -> Icons.Rounded.DoneAll
                         }
+                        val deliveryTint = if (message.delivery == DeliveryStatus.READ) {
+                            Color(0xFF67E8F9)
+                        } else {
+                            Color.White.copy(alpha = 0.88f)
+                        }
                         Icon(
                             imageVector = deliveryIcon,
                             contentDescription = message.delivery.name,
-                            tint = Color.White.copy(alpha = 0.88f),
+                            tint = deliveryTint,
                             modifier = Modifier.size(14.dp),
                         )
                     }
@@ -1803,3 +1815,51 @@ private fun formatRecordingElapsed(ms: Long): String {
     val s = totalSec % 60L
     return "%d:%02d".format(m, s)
 }
+
+private fun decodeChatBitmap(context: Context, pathOrUri: String?, maxDim: Int): android.graphics.Bitmap? {
+    if (pathOrUri.isNullOrBlank()) return null
+    return runCatching {
+        val bytes = when {
+            pathOrUri.startsWith("content://") || pathOrUri.startsWith("file://") -> {
+                context.contentResolver.openInputStream(Uri.parse(pathOrUri))?.use { it.readBytes() }
+            }
+            else -> {
+                val f = File(pathOrUri)
+                if (f.exists()) f.readBytes() else null
+            }
+        } ?: return null
+
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / sample > maxDim || bounds.outHeight / sample > maxDim) {
+            sample *= 2
+        }
+        val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
+    }.getOrNull()
+}
+
+private fun isEmojiOnlyMessage(text: String): Boolean {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty() || trimmed.length > 14) return false
+    var hasEmoji = false
+    var i = 0
+    while (i < trimmed.length) {
+        val cp = trimmed.codePointAt(i)
+        i += Character.charCount(cp)
+        if (Character.isWhitespace(cp)) continue
+        val isEmojiRange =
+            (cp in 0x1F300..0x1FAFF) ||
+                (cp in 0x2600..0x27BF) ||
+                (cp in 0xFE00..0xFE0F) ||
+                cp == 0x200D
+        if (isEmojiRange) {
+            hasEmoji = true
+        } else {
+            return false
+        }
+    }
+    return hasEmoji
+}
+

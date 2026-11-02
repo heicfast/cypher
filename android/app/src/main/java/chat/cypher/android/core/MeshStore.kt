@@ -2,6 +2,9 @@ package chat.cypher.android.core
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -19,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.io.File
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -28,6 +32,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlin.math.min
 
 enum class DeliveryStatus {
     QUEUED,
@@ -102,8 +107,11 @@ object MeshStore {
     private const val PREFS_NAME = "cypher_mesh_store"
     private const val KEY_SEED_CIPHERTEXT = "identity_seed_ct"
     private const val KEY_SEED_IV = "identity_seed_iv"
+    private const val KEY_DISPLAY_NAME = "display_name_v2"
     private const val KEY_NICKNAME = "nickname"
     private const val KEY_STATUS_BIO = "status_bio"
+    private const val KEY_AVATAR_URI = "profile_avatar_uri_v2"
+    private const val KEY_PEER_AVATARS = "peer_avatars_v2"
     private const val KEY_JOINED_CHANNELS = "joined_channels_v2"
     private const val KEY_BOOKMARKED_CHANNELS = "bookmarked_channels_v2"
     private const val KEY_CHANNEL_PASSWORDS = "channel_passwords_v2"
@@ -147,11 +155,20 @@ object MeshStore {
     private val _localFingerprintHex = MutableStateFlow("")
     val localFingerprintHex: StateFlow<String> = _localFingerprintHex.asStateFlow()
 
-    private val _nickname = MutableStateFlow("anon")
+    private val _displayName = MutableStateFlow("Neon Lynx")
+    val displayName: StateFlow<String> = _displayName.asStateFlow()
+
+    private val _nickname = MutableStateFlow("neon_lynx")
     val nickname: StateFlow<String> = _nickname.asStateFlow()
 
     private val _statusBio = MutableStateFlow("Available on local BLE mesh")
     val statusBio: StateFlow<String> = _statusBio.asStateFlow()
+
+    private val _avatarUri = MutableStateFlow<String?>(null)
+    val avatarUri: StateFlow<String?> = _avatarUri.asStateFlow()
+
+    private val _peerAvatars = MutableStateFlow<Map<String, String>>(emptyMap())
+    val peerAvatars: StateFlow<Map<String, String>> = _peerAvatars.asStateFlow()
 
     private val _peers = MutableStateFlow<List<PeerEntry>>(emptyList())
     val peers: StateFlow<List<PeerEntry>> = _peers.asStateFlow()
@@ -321,15 +338,46 @@ object MeshStore {
         if (database == null) {
             attachDatabase(context)
         }
-        val existingNick = sp.getString(KEY_NICKNAME, null)
-        if (!existingNick.isNullOrBlank()) {
-            _nickname.value = existingNick
+
+        val ctB64 = sp.getString(KEY_SEED_CIPHERTEXT, null)
+        val ivB64 = sp.getString(KEY_SEED_IV, null)
+        val activeSeed: ByteArray = if (ctB64 != null && ivB64 != null) {
+            val decrypted = runCatching {
+                decryptSeed(
+                    Base64.decode(ctB64, Base64.NO_WRAP),
+                    Base64.decode(ivB64, Base64.NO_WRAP),
+                )
+            }.getOrNull()
+            if (decrypted != null && decrypted.size == 32) {
+                decrypted
+            } else {
+                ByteArray(32).also { SecureRandom().nextBytes(it) }.also { persistSeed(sp, it) }
+            }
         } else {
-            val generated = "anon${(1000..9999).random()}"
-            sp.edit().putString(KEY_NICKNAME, generated).apply()
-            _nickname.value = generated
+            ByteArray(32).also { SecureRandom().nextBytes(it) }.also { persistSeed(sp, it) }
         }
+
+        deriveLocalFallbackIdentityIfNeeded(activeSeed)
+
+        val existingNick = sp.getString(KEY_NICKNAME, null)
+        val existingDisplay = sp.getString(KEY_DISPLAY_NAME, null)
+        if (!existingNick.isNullOrBlank() && !PeerIdentity.isLegacyAnonNickname(existingNick)) {
+            _nickname.value = existingNick
+            _displayName.value = existingDisplay?.takeIf { it.isNotBlank() }
+                ?: PeerIdentity.formatDisplayNameFromUsername(existingNick)
+        } else {
+            val creative = PeerIdentity.generateCreativeProfileIdentity(activeSeed)
+            _nickname.value = creative.username
+            _displayName.value = existingDisplay?.takeIf { it.isNotBlank() } ?: creative.displayName
+            sp.edit()
+                .putString(KEY_NICKNAME, _nickname.value)
+                .putString(KEY_DISPLAY_NAME, _displayName.value)
+                .apply()
+        }
+
         sp.getString(KEY_STATUS_BIO, null)?.let { _statusBio.value = it }
+        _avatarUri.value = sp.getString(KEY_AVATAR_URI, null)?.takeIf { it.isNotBlank() }
+        _peerAvatars.value = decodeStringMap(sp.getString(KEY_PEER_AVATARS, null))
 
         val savedChannels = sp.getStringSet(KEY_JOINED_CHANNELS, null)
         if (!savedChannels.isNullOrEmpty()) {
@@ -373,25 +421,7 @@ object MeshStore {
         _nearbyPeerAlertsEnabled.value = sp.getBoolean(KEY_NEARBY_PEER_ALERTS_ENABLED, true)
         _soundVibrationEnabled.value = sp.getBoolean(KEY_SOUND_VIBRATION_ENABLED, true)
 
-        val ctB64 = sp.getString(KEY_SEED_CIPHERTEXT, null)
-        val ivB64 = sp.getString(KEY_SEED_IV, null)
-        if (ctB64 != null && ivB64 != null) {
-            val decrypted = runCatching {
-                decryptSeed(
-                    Base64.decode(ctB64, Base64.NO_WRAP),
-                    Base64.decode(ivB64, Base64.NO_WRAP),
-                )
-            }.getOrNull()
-            if (decrypted != null && decrypted.size == 32) {
-                deriveLocalFallbackIdentityIfNeeded(decrypted)
-                return decrypted
-            }
-        }
-
-        val fresh = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        persistSeed(sp, fresh)
-        deriveLocalFallbackIdentityIfNeeded(fresh)
-        return fresh
+        return activeSeed
     }
 
     /**
@@ -445,10 +475,26 @@ object MeshStore {
     }
 
     fun updateNickname(context: Context, value: String) {
-        val cleaned = value.trim().removePrefix("@").take(24).ifEmpty { "anon" }
+        val fallback = PeerIdentity.generateCreativeProfileIdentity().username
+        val cleaned = value.trim().removePrefix("@").replace(Regex("\\s+"), "_").take(24).ifEmpty { fallback }
         _nickname.value = cleaned
+        if (_displayName.value.isBlank() || PeerIdentity.isLegacyAnonNickname(_displayName.value)) {
+            _displayName.value = PeerIdentity.formatDisplayNameFromUsername(cleaned)
+        }
         val sp = prefs ?: context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        sp.edit().putString(KEY_NICKNAME, cleaned).apply()
+        sp.edit()
+            .putString(KEY_NICKNAME, cleaned)
+            .putString(KEY_DISPLAY_NAME, _displayName.value)
+            .apply()
+    }
+
+    fun updateDisplayName(context: Context, value: String) {
+        val cleaned = value.trim().take(32).ifEmpty {
+            PeerIdentity.formatDisplayNameFromUsername(_nickname.value)
+        }
+        _displayName.value = cleaned
+        val sp = prefs ?: context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        sp.edit().putString(KEY_DISPLAY_NAME, cleaned).apply()
     }
 
     fun updateStatusBio(context: Context, value: String) {
@@ -456,6 +502,60 @@ object MeshStore {
         _statusBio.value = cleaned
         val sp = prefs ?: context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         sp.edit().putString(KEY_STATUS_BIO, cleaned).apply()
+    }
+
+    fun updateAvatarUri(context: Context, uriOrPreset: String?) {
+        val cleaned = uriOrPreset?.trim()?.takeIf { it.isNotBlank() }
+        _avatarUri.value = cleaned
+        val sp = prefs ?: context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (cleaned == null) {
+            sp.edit().remove(KEY_AVATAR_URI).apply()
+        } else {
+            sp.edit().putString(KEY_AVATAR_URI, cleaned).apply()
+        }
+    }
+
+    /**
+     * Copies and downscales a picked gallery image to `filesDir/avatars/profile_avatar.jpg`
+     * so the user's profile picture persists offline without external storage permissions.
+     */
+    fun saveProfilePictureFromUri(context: Context, uri: Uri): String? {
+        return runCatching {
+            val rawBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: return null
+            val avatarDir = File(context.filesDir, "avatars").apply { mkdirs() }
+            val outFile = File(avatarDir, "profile_avatar_${System.currentTimeMillis()}.jpg")
+
+            val decoded = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
+            if (decoded != null) {
+                val side = min(decoded.width, decoded.height).coerceAtLeast(1)
+                val x = (decoded.width - side) / 2
+                val y = (decoded.height - side) / 2
+                val cropped = Bitmap.createBitmap(decoded, x, y, side, side)
+                val targetSize = min(side, 360)
+                val scaled = if (side != targetSize) {
+                    Bitmap.createScaledBitmap(cropped, targetSize, targetSize, true)
+                } else {
+                    cropped
+                }
+                outFile.outputStream().use { out ->
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 88, out)
+                }
+            } else {
+                outFile.writeBytes(rawBytes)
+            }
+            updateAvatarUri(context, outFile.absolutePath)
+            outFile.absolutePath
+        }.getOrNull()
+    }
+
+    fun setPeerAvatar(peerHex: String, uriOrPreset: String?) {
+        val norm = peerHex.lowercase(Locale.US)
+        val cleaned = uriOrPreset?.trim().orEmpty()
+        _peerAvatars.update { current ->
+            if (cleaned.isEmpty()) current - norm else current + (norm to cleaned)
+        }
+        prefs?.edit()?.putString(KEY_PEER_AVATARS, encodeStringMap(_peerAvatars.value))?.apply()
     }
 
     fun selectConversation(key: String) {
@@ -596,13 +696,134 @@ object MeshStore {
         }
     }
 
+    /**
+     * Immediately registers or refreshes a peer seen via an incoming mesh message, file transfer,
+     * Noise payload, or connection event so the peer is guaranteed to be visible in the People tab
+     * (`ContactsTab`) and Mesh Network topology even before or between `nativeStateJson` polls.
+     */
+    fun recordPeerSeenFromEvent(
+        peerKeyHex: String,
+        nickname: String? = null,
+        connected: Boolean = true,
+        sessionEstablished: Boolean? = null,
+        hops: Int? = null,
+        rssi: Int? = null,
+        fingerprintHex: String? = null,
+    ) {
+        val normKey = peerKeyHex.trim().lowercase(Locale.US)
+        if (normKey.isBlank() || normKey == "self" || normKey == "system") return
+        if (normKey == _localIdentityHex.value.lowercase(Locale.US)) return
+
+        val now = System.currentTimeMillis()
+        val alias = _peerAliases.value[normKey]
+        val existingLive = _peers.value.firstOrNull { it.peerKeyHex.equals(normKey, ignoreCase = true) }
+        val existingKnown = _knownPeers.value[normKey]
+
+        val rawNick = nickname?.trim()?.removePrefix("@")?.takeIf {
+            it.isNotBlank() && !PeerIdentity.isLegacyAnonNickname(it)
+        }
+        val resolvedNick = when {
+            !alias.isNullOrBlank() -> alias
+            !rawNick.isNullOrBlank() -> rawNick
+            existingLive != null && !PeerIdentity.isLegacyAnonNickname(existingLive.nickname) -> existingLive.nickname
+            existingKnown != null && !PeerIdentity.isLegacyAnonNickname(existingKnown.nickname) -> existingKnown.nickname
+            else -> PeerIdentity.creativeHandleForPeer(normKey)
+        }
+
+        val resolvedFp = when {
+            !fingerprintHex.isNullOrBlank() -> fingerprintHex.replace(" ", "").uppercase(Locale.US)
+            existingLive?.fingerprintHex?.isNotBlank() == true -> existingLive.fingerprintHex
+            existingKnown?.fingerprintHex?.isNotBlank() == true -> existingKnown.fingerprintHex
+            else -> computeDeterministicPeerFingerprint(normKey)
+        }
+
+        val isVerified = normKey in _verifiedPeers.value ||
+            existingLive?.verified == true ||
+            existingKnown?.verified == true
+
+        val updatedEntry = PeerEntry(
+            peerKeyHex = normKey,
+            nickname = resolvedNick,
+            connected = connected || (existingLive?.connected == true),
+            sessionEstablished = sessionEstablished ?: (existingLive?.sessionEstablished == true),
+            rssi = rssi ?: existingLive?.rssi ?: existingKnown?.lastRssi,
+            hops = (hops ?: existingLive?.hops ?: existingKnown?.lastHops ?: 1).coerceIn(1, 7),
+            lastSeenMs = now,
+            fingerprintHex = resolvedFp,
+            verified = isVerified,
+            routePath = existingLive?.routePath ?: emptyList(),
+        )
+
+        _peers.update { current ->
+            val idx = current.indexOfFirst { it.peerKeyHex.equals(normKey, ignoreCase = true) }
+            if (idx >= 0) {
+                current.toMutableList().apply { set(idx, updatedEntry) }
+            } else {
+                current + updatedEntry
+            }
+        }
+
+        MeshGraphService.syncPeersSnapshot(
+            localPeerId = _localIdentityHex.value,
+            localNickname = _nickname.value,
+            peers = _peers.value,
+        )
+
+        val entity = PeerEntity(
+            peerKeyHex = normKey,
+            nickname = resolvedNick,
+            fingerprintHex = resolvedFp,
+            verified = isVerified,
+            favorite = normKey in _favoritePeers.value,
+            blocked = normKey in _blockedPeers.value,
+            customAlias = alias.orEmpty(),
+            privateNote = _peerNotes.value[normKey].orEmpty(),
+            lastSeenMs = now,
+            lastRssi = updatedEntry.rssi,
+            lastHops = updatedEntry.hops,
+            routePathCsv = updatedEntry.routePath.joinToString(","),
+        )
+        _knownPeers.update { it + (normKey to entity) }
+
+        val db = database ?: return
+        dbScope.launch {
+            runCatching {
+                db.peerDao().upsertPeer(entity)
+            }
+        }
+    }
+
     fun updatePeers(peers: List<PeerEntry>) {
         val verified = _verifiedPeers.value
         val aliases = _peerAliases.value
         val existingKnown = _knownPeers.value
-        val enriched = peers.map { peer ->
-            val normKey = peer.peerKeyHex.lowercase(Locale.US)
+        val existingLiveByKey = _peers.value.associateBy { it.peerKeyHex.lowercase(Locale.US) }
+        val now = System.currentTimeMillis()
+
+        val incomingByKey = peers.associateBy { it.peerKeyHex.lowercase(Locale.US) }
+
+        // Merge incoming engine peers with recently seen mesh message peers (within last 10 minutes)
+        // so relayed #mesh senders remain visible in the People tab.
+        val mergedKeys = linkedSetOf<String>()
+        mergedKeys.addAll(incomingByKey.keys)
+        existingLiveByKey.forEach { (k, prev) ->
+            if (k !in mergedKeys && (now - prev.lastSeenMs) <= 600_000L) {
+                mergedKeys.add(k)
+            }
+        }
+
+        val enriched = mergedKeys.mapNotNull { normKey ->
+            if (normKey.isBlank() || normKey == _localIdentityHex.value.lowercase(Locale.US)) {
+                return@mapNotNull null
+            }
+            val peer = incomingByKey[normKey] ?: existingLiveByKey[normKey] ?: return@mapNotNull null
             val customName = aliases[normKey] ?: aliases[peer.peerKeyHex]
+            val cleanPeerNick = peer.nickname.takeIf {
+                it.isNotBlank() && !PeerIdentity.isLegacyAnonNickname(it)
+            } ?: existingKnown[normKey]?.nickname?.takeIf {
+                it.isNotBlank() && !PeerIdentity.isLegacyAnonNickname(it)
+            } ?: PeerIdentity.creativeHandleForPeer(normKey)
+
             val resolvedFp = when {
                 peer.fingerprintHex.isNotBlank() -> peer.fingerprintHex.replace(" ", "").uppercase(Locale.US)
                 existingKnown[normKey]?.fingerprintHex?.isNotBlank() == true ->
@@ -611,8 +832,8 @@ object MeshStore {
             }
             peer.copy(
                 peerKeyHex = normKey,
-                nickname = if (!customName.isNullOrBlank()) customName else peer.nickname,
-                verified = normKey in verified || peer.peerKeyHex in verified,
+                nickname = if (!customName.isNullOrBlank()) customName else cleanPeerNick,
+                verified = peer.verified || normKey in verified || peer.peerKeyHex in verified,
                 fingerprintHex = resolvedFp,
             )
         }
@@ -662,9 +883,10 @@ object MeshStore {
         val norm = peerKeyHex.lowercase(Locale.US)
         _peerAliases.value[norm]?.takeIf { it.isNotBlank() }?.let { return it }
         _peers.value.firstOrNull { it.peerKeyHex.equals(norm, ignoreCase = true) }?.nickname
-            ?.takeIf { it.isNotBlank() }?.let { return it }
-        _knownPeers.value[norm]?.nickname?.takeIf { it.isNotBlank() }?.let { return it }
-        return "anon#${norm.take(6)}"
+            ?.takeIf { it.isNotBlank() && !PeerIdentity.isLegacyAnonNickname(it) }?.let { return it }
+        _knownPeers.value[norm]?.nickname
+            ?.takeIf { it.isNotBlank() && !PeerIdentity.isLegacyAnonNickname(it) }?.let { return it }
+        return PeerIdentity.creativeHandleForPeer(norm)
     }
 
     fun appendMessage(message: ChatMessage) {
@@ -672,12 +894,39 @@ object MeshStore {
         if (senderNorm in _blockedPeers.value || message.senderHex in _blockedPeers.value) return
         pruneExpiredMessages()
 
+        // Ensure non-empty text fallback so bubbles never render empty
+        val safeText = message.text.ifBlank {
+            message.attachmentMeta ?: when (message.kind) {
+                MessageKind.IMAGE -> "Photo"
+                MessageKind.VOICE_NOTE -> "Voice message"
+                MessageKind.FILE -> "File attachment"
+                MessageKind.LOCATION -> "Location"
+                else -> ""
+            }
+        }
+        val normalizedMsg = if (safeText != message.text) message.copy(text = safeText) else message
+
+        // If this is an incoming message from a real peer, immediately record the peer so they
+        // appear in the People tab and Mesh Network screen.
+        if (!normalizedMsg.outgoing &&
+            senderNorm.isNotBlank() &&
+            senderNorm != "self" &&
+            senderNorm != "system"
+        ) {
+            recordPeerSeenFromEvent(
+                peerKeyHex = senderNorm,
+                nickname = normalizedMsg.senderLabel,
+                connected = true,
+                hops = normalizedMsg.hops.coerceIn(1, 7),
+            )
+        }
+
         var persistedMessage: ChatMessage? = null
         _conversations.update { current ->
-            val bucket = current[message.conversationKey].orEmpty()
-            if (bucket.any { it.id == message.id }) return@update current
-            persistedMessage = message
-            current + (message.conversationKey to (bucket + message).takeLast(500))
+            val bucket = current[normalizedMsg.conversationKey].orEmpty()
+            if (bucket.any { it.id == normalizedMsg.id }) return@update current
+            persistedMessage = normalizedMsg
+            current + (normalizedMsg.conversationKey to (bucket + normalizedMsg).takeLast(500))
         }
 
         val toSave = persistedMessage ?: return
@@ -854,19 +1103,23 @@ object MeshStore {
         }
     }
 
-    fun markConversationRead(conversationKey: String) {
+    fun markConversationRead(conversationKey: String): List<ChatMessage> {
         clearUnread(conversationKey)
+        val newlyRead = mutableListOf<ChatMessage>()
         _conversations.update { current ->
             val list = current[conversationKey] ?: return@update current
             val updated = list.map { msg ->
                 if (!msg.outgoing && msg.delivery != DeliveryStatus.READ) {
-                    msg.copy(delivery = DeliveryStatus.READ)
+                    val readMsg = msg.copy(delivery = DeliveryStatus.READ)
+                    newlyRead.add(readMsg)
+                    readMsg
                 } else {
                     msg
                 }
             }
             current + (conversationKey to updated)
         }
+        return newlyRead
     }
 
     fun incrementUnread(conversationKey: String) {
@@ -1097,6 +1350,10 @@ object MeshStore {
     fun emergencyWipe(context: Context) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().commit()
         runCatching {
+            File(context.filesDir, "avatars").deleteRecursively()
+            File(context.filesDir, "incoming").deleteRecursively()
+        }
+        runCatching {
             val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
             if (ks.containsAlias(KEYSTORE_ALIAS)) {
                 ks.deleteEntry(KEYSTORE_ALIAS)
@@ -1129,6 +1386,8 @@ object MeshStore {
         _blockedPeers.value = emptySet()
         _peerAliases.value = emptyMap()
         _peerNotes.value = emptyMap()
+        _peerAvatars.value = emptyMap()
+        _avatarUri.value = null
         _pinnedConversations.value = setOf(PUBLIC_CONVERSATION)
         _mutedConversations.value = emptySet()
         _archivedConversations.value = emptySet()

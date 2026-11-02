@@ -1,5 +1,6 @@
 package chat.cypher.android.ui.components
 
+import android.graphics.BitmapFactory
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -7,6 +8,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -33,7 +35,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,15 +47,19 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import chat.cypher.android.core.Geohash
+import chat.cypher.android.core.MeshStore
 import chat.cypher.android.core.PeerIdentity
 import chat.cypher.android.ui.theme.CypherTheme
+import java.io.File
 import java.util.Locale
 
 /**
@@ -198,7 +206,8 @@ fun SignalBarsIndicator(
 }
 
 /**
- * Deterministic peer/channel avatar for real mesh peers and channels.
+ * Deterministic peer/channel avatar for real mesh peers and channels, with support for custom
+ * profile photos (`avatarOverride` or `MeshStore.avatarUri`) and preset avatar badges.
  */
 @Composable
 fun PeerAvatar(
@@ -208,11 +217,44 @@ fun PeerAvatar(
     connected: Boolean = false,
     sessionEstablished: Boolean = false,
     isChannel: Boolean = false,
+    avatarOverride: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val palette = CypherTheme.colors
+    val localIdHex by MeshStore.localIdentityHex.collectAsState()
+    val localAvatarUri by MeshStore.avatarUri.collectAsState()
+    val peerAvatars by MeshStore.peerAvatars.collectAsState()
+
+    val normKey = peerKeyHex.lowercase(Locale.US)
+    val effectiveAvatarSource = remember(normKey, avatarOverride, localIdHex, localAvatarUri, peerAvatars) {
+        when {
+            !avatarOverride.isNullOrBlank() -> avatarOverride
+            !isChannel && (normKey == "self" || (localIdHex.isNotBlank() && normKey == localIdHex.lowercase(Locale.US))) -> localAvatarUri
+            !isChannel -> peerAvatars[normKey]
+            else -> null
+        }
+    }
+
+    val customBitmap = remember(effectiveAvatarSource) {
+        val src = effectiveAvatarSource
+        if (!src.isNullOrBlank() && !src.startsWith("preset:") && File(src).exists()) {
+            runCatching { BitmapFactory.decodeFile(src) }.getOrNull()
+        } else {
+            null
+        }
+    }
+
+    val presetEmoji = remember(effectiveAvatarSource) {
+        val src = effectiveAvatarSource
+        if (!src.isNullOrBlank() && src.startsWith("preset:")) {
+            PeerIdentity.PresetAvatars.firstOrNull { it.first == src }?.second
+        } else {
+            null
+        }
+    }
+
     val accent = if (isChannel) {
-        when (peerKeyHex.lowercase(Locale.US)) {
+        when (normKey) {
             "#mesh" -> palette.accent
             else -> palette.accentLight
         }
@@ -222,12 +264,12 @@ fun PeerAvatar(
 
     Box(modifier = modifier.size(size), contentAlignment = Alignment.Center) {
         if (isChannel) {
-            val channelKey = peerKeyHex.lowercase(Locale.US)
+            val channelKey = normKey
             val isMeshPrimary = channelKey == "#mesh"
             val rawTag = channelKey.removePrefix("#")
             val isGeohashChannel = !isMeshPrimary && Geohash.isValid(rawTag)
             val isPasswordProtected = !isMeshPrimary &&
-                chat.cypher.android.core.MeshStore.isChannelPasswordProtected(channelKey)
+                MeshStore.isChannelPasswordProtected(channelKey)
             val bgBrush = if (isMeshPrimary) {
                 Brush.linearGradient(listOf(Color(0xFF4F33A8), Color(0xFF2D1E6B)))
             } else {
@@ -261,6 +303,45 @@ fun PeerAvatar(
                     contentDescription = nickname,
                     tint = iconTint,
                     modifier = Modifier.size(size * 0.48f),
+                )
+            }
+        } else if (customBitmap != null) {
+            Image(
+                bitmap = customBitmap.asImageBitmap(),
+                contentDescription = nickname,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .border(
+                        width = 1.4.dp,
+                        color = accent.copy(alpha = 0.65f),
+                        shape = CircleShape,
+                    ),
+            )
+        } else if (presetEmoji != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                accent.copy(alpha = 0.34f),
+                                Color(0xFF1B1E32),
+                            ),
+                        ),
+                    )
+                    .border(
+                        width = 1.2.dp,
+                        color = accent.copy(alpha = 0.52f),
+                        shape = CircleShape,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = presetEmoji,
+                    fontSize = (size.value * 0.48f).sp,
                 )
             }
         } else {

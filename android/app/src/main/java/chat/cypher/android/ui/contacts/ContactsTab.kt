@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import chat.cypher.android.core.ChatMessage
 import chat.cypher.android.core.MeshController
 import chat.cypher.android.core.MeshStore
 import chat.cypher.android.core.PeerEntry
@@ -65,6 +66,7 @@ import chat.cypher.android.core.PeerIdentity
 import chat.cypher.android.core.RoutePlanner
 import chat.cypher.android.data.PeerEntity
 import chat.cypher.android.ui.chats.HomeSubTab
+import chat.cypher.android.ui.components.PeerAvatar
 import chat.cypher.android.ui.components.RadarPulseGraphic
 import chat.cypher.android.ui.components.SignalBarsIndicator
 import chat.cypher.android.ui.theme.CypherTheme
@@ -76,6 +78,7 @@ import kotlin.math.roundToInt
 data class MeshPersonItem(
     val peerKeyHex: String,
     val displayName: String,
+    val handle: String,
     val distanceMeters: Int?,
     val hops: Int,
     val rssi: Int?,
@@ -95,6 +98,7 @@ fun PeopleScreenContent(
     val palette = CypherTheme.colors
     val livePeers by MeshStore.peers.collectAsState()
     val knownPeers by MeshStore.knownPeers.collectAsState()
+    val conversations by MeshStore.conversations.collectAsState()
     val verifiedPeers by MeshStore.verifiedPeers.collectAsState()
     val favoritePeers by MeshStore.favoritePeers.collectAsState()
     val blockedPeers by MeshStore.blockedPeers.collectAsState()
@@ -102,12 +106,14 @@ fun PeopleScreenContent(
 
     var selectedPerson by remember { mutableStateOf<MeshPersonItem?>(null) }
 
-    val peopleList = remember(livePeers, knownPeers, verifiedPeers, favoritePeers) {
+    val peopleList = remember(livePeers, knownPeers, conversations, verifiedPeers, favoritePeers, localIdentityHex) {
         buildRealPeopleList(
             livePeers = livePeers,
             knownPeers = knownPeers,
+            conversations = conversations,
             verifiedPeers = verifiedPeers,
             favoritePeers = favoritePeers,
+            localIdentityHex = localIdentityHex,
         )
     }
 
@@ -287,21 +293,13 @@ fun PeopleScreenContent(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(CircleShape)
-                        .background(person.avatarTint.copy(alpha = 0.22f))
-                        .border(1.5.dp, person.avatarTint.copy(alpha = 0.55f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Person,
-                        contentDescription = person.displayName,
-                        tint = person.avatarTint,
-                        modifier = Modifier.size(34.dp),
-                    )
-                }
+                PeerAvatar(
+                    peerKeyHex = person.peerKeyHex,
+                    nickname = person.displayName,
+                    size = 64.dp,
+                    connected = person.connected,
+                    sessionEstablished = person.sessionEstablished,
+                )
 
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Row(
@@ -322,12 +320,19 @@ fun PeopleScreenContent(
                             )
                         }
                     }
+                    if (person.handle.isNotBlank() && !person.displayName.equals(person.handle, ignoreCase = true)) {
+                        Text(
+                            text = person.handle,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = GeistMono),
+                            color = palette.accentLight,
+                        )
+                    }
                     Spacer(modifier = Modifier.height(2.dp))
                     val distText = person.distanceMeters?.let { "~ $it m • " }.orEmpty()
                     val statusText = if (person.connected) {
                         "${distText}${person.hops} ${if (person.hops == 1) "hop" else "hops"} • ${person.rssi ?: -68} dBm"
                     } else {
-                        "Offline • Last known at ${person.hops} hop(s)"
+                        "Seen on mesh • ${person.hops} ${if (person.hops == 1) "hop" else "hops"}"
                     }
                     Text(
                         text = statusText,
@@ -446,7 +451,7 @@ private fun MeshPersonCard(
     } else if (person.connected) {
         "Connected • $hopText"
     } else {
-        "Offline • Saved contact ($hopText)"
+        "Seen on mesh • $hopText"
     }
 
     Row(
@@ -466,21 +471,13 @@ private fun MeshPersonCard(
             horizontalArrangement = Arrangement.spacedBy(13.dp),
             modifier = Modifier.weight(1f),
         ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(person.avatarTint.copy(alpha = 0.22f))
-                    .border(1.2.dp, person.avatarTint.copy(alpha = 0.55f), CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Person,
-                    contentDescription = person.displayName,
-                    tint = person.avatarTint,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
+            PeerAvatar(
+                peerKeyHex = person.peerKeyHex,
+                nickname = person.displayName,
+                size = 42.dp,
+                connected = person.connected,
+                sessionEstablished = person.sessionEstablished,
+            )
 
             Column(modifier = Modifier.weight(1f)) {
                 Row(
@@ -534,29 +531,47 @@ private fun MeshPersonCard(
     }
 }
 
+private fun formatPeerHandle(rawName: String, peerKeyHex: String): Pair<String, String> {
+    val clean = rawName.trim()
+    val effective = if (clean.isBlank() || PeerIdentity.isLegacyAnonNickname(clean)) {
+        PeerIdentity.creativeHandleForPeer(peerKeyHex)
+    } else {
+        clean
+    }
+    val handle = if (effective.startsWith("@")) effective else "@$effective"
+    val display = if (effective.contains("_") && !effective.startsWith("@")) {
+        PeerIdentity.formatDisplayNameFromUsername(effective)
+    } else {
+        handle
+    }
+    return display to handle
+}
+
 private fun buildRealPeopleList(
     livePeers: List<PeerEntry>,
     knownPeers: Map<String, PeerEntity>,
+    conversations: Map<String, List<ChatMessage>>,
     verifiedPeers: Set<String>,
     favoritePeers: Set<String>,
+    localIdentityHex: String,
 ): List<MeshPersonItem> {
     val result = mutableListOf<MeshPersonItem>()
     val seenKeys = mutableSetOf<String>()
+    val myKey = localIdentityHex.lowercase(Locale.US)
 
     livePeers.forEach { peer ->
         val normKey = peer.peerKeyHex.lowercase(Locale.US)
+        if (normKey.isBlank() || normKey == myKey || normKey == "self" || normKey == "system") return@forEach
         seenKeys.add(normKey)
         val distanceMeters = estimateDistanceMeters(peer.rssi, peer.hops)
         val tint = PeerIdentity.colorForPeer(normKey, isDark = true)
-        val display = if (peer.nickname.startsWith("anon#") || peer.nickname.startsWith("@")) {
-            peer.nickname
-        } else {
-            "@${peer.nickname}"
-        }
+        val alias = knownPeers[normKey]?.customAlias.orEmpty()
+        val (display, handle) = formatPeerHandle(alias.ifBlank { peer.nickname }, normKey)
         result.add(
             MeshPersonItem(
                 peerKeyHex = normKey,
                 displayName = display,
+                handle = handle,
                 distanceMeters = distanceMeters,
                 hops = peer.hops.coerceIn(1, 7),
                 rssi = peer.rssi,
@@ -568,27 +583,25 @@ private fun buildRealPeopleList(
         )
     }
 
-    // Also include offline peers that the user has explicitly verified or favorited
+    // Include all known peers discovered on the mesh or saved in Room DB
     knownPeers.values
         .filter { entity ->
             val k = entity.peerKeyHex.lowercase(Locale.US)
-            k !in seenKeys && (entity.verified || entity.favorite || k in verifiedPeers || k in favoritePeers)
+            k.isNotBlank() && k != myKey && k != "self" && k != "system" && k !in seenKeys && !entity.blocked
         }
         .sortedByDescending { it.lastSeenMs }
         .forEach { entity ->
             val normKey = entity.peerKeyHex.lowercase(Locale.US)
+            seenKeys.add(normKey)
             val tint = PeerIdentity.colorForPeer(normKey, isDark = true)
             val rawName = entity.customAlias.ifBlank { entity.nickname }
-            val display = if (rawName.startsWith("anon#") || rawName.startsWith("@")) {
-                rawName
-            } else {
-                "@$rawName"
-            }
+            val (display, handle) = formatPeerHandle(rawName, normKey)
             result.add(
                 MeshPersonItem(
                     peerKeyHex = normKey,
                     displayName = display,
-                    distanceMeters = null,
+                    handle = handle,
+                    distanceMeters = estimateDistanceMeters(entity.lastRssi, entity.lastHops),
                     hops = entity.lastHops.coerceIn(1, 7),
                     rssi = entity.lastRssi,
                     avatarTint = tint,
@@ -598,6 +611,36 @@ private fun buildRealPeopleList(
                 ),
             )
         }
+
+    // Also inspect all messages in #mesh or DMs so any peer who has sent a message is guaranteed visible
+    conversations.values.flatten().forEach { msg ->
+        val normKey = msg.senderHex.lowercase(Locale.US)
+        if (normKey.isNotBlank() &&
+            !normKey.startsWith("#") &&
+            normKey != myKey &&
+            normKey != "self" &&
+            normKey != "system" &&
+            normKey !in seenKeys
+        ) {
+            seenKeys.add(normKey)
+            val tint = PeerIdentity.colorForPeer(normKey, isDark = true)
+            val (display, handle) = formatPeerHandle(msg.senderLabel, normKey)
+            result.add(
+                MeshPersonItem(
+                    peerKeyHex = normKey,
+                    displayName = display,
+                    handle = handle,
+                    distanceMeters = estimateDistanceMeters(null, msg.hops.coerceIn(1, 7)),
+                    hops = msg.hops.coerceIn(1, 7),
+                    rssi = null,
+                    avatarTint = tint,
+                    connected = true,
+                    sessionEstablished = msg.encrypted,
+                    verified = normKey in verifiedPeers,
+                ),
+            )
+        }
+    }
 
     return result
 }

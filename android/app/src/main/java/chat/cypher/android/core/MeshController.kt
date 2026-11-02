@@ -5,6 +5,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
@@ -24,12 +26,15 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 data class SlashCommandSpec(
     val command: String,
@@ -46,6 +51,7 @@ data class SlashCommandSpec(
 object MeshController {
     private const val TAG = "CypherMeshCtrl"
     private const val MSG_NOTIFICATION_CHANNEL = "cypher_incoming_messages"
+    private const val MAX_FILE_TRANSFER_BYTES = 10 * 1024 * 1024L
 
     val store: MeshStore
         get() = MeshStore
@@ -84,6 +90,7 @@ object MeshController {
     private val started = AtomicBoolean(false)
     private val handleRef = AtomicLong(0L)
     private val pendingChallenges = ConcurrentHashMap<String, String>()
+    private val voiceBurstBuffers = ConcurrentHashMap<String, ByteArrayOutputStream>()
 
     private var bleLayer: BleLinkLayer? = null
     private var unsubscribeEvents: (() -> Unit)? = null
@@ -166,6 +173,27 @@ object MeshController {
         }
     }
 
+    fun updateFullProfile(
+        context: Context,
+        displayName: String,
+        username: String,
+        statusBio: String,
+        avatarUri: String?,
+    ) {
+        MeshStore.updateNickname(context, username)
+        MeshStore.updateDisplayName(context, displayName)
+        MeshStore.updateStatusBio(context, statusBio)
+        MeshStore.updateAvatarUri(context, avatarUri)
+        val h = handleRef.get()
+        if (h != 0L && CypherBridge.isLoaded) {
+            val resp = synchronized(engineLock) {
+                CypherBridge.nativeSetNickname(h, MeshStore.nickname.value)
+            }
+            processNativeResponse(resp)
+            refreshEngineState()
+        }
+    }
+
     fun rotateIdentity(context: Context) {
         val appCtx = context.applicationContext
         MeshStore.rotateIdentitySeed(appCtx)
@@ -175,8 +203,28 @@ object MeshController {
                 MeshRuntime.panicReset(appCtx, nick)
             }
             handleRef.set(newHandle)
+            // Re-push PoweredOn (state 5) so the freshly-created Rust engine resumes scanning and advertising
+            BleLinkLayer.active?.pushRadioState(5)
             refreshEngineState()
             announceNow()
+        }
+    }
+
+    /**
+     * Marks a conversation as read locally and dispatches Noise `0x02` read receipts for unread
+     * incoming private messages.
+     */
+    fun markConversationReadAndNotify(conversationKey: String) {
+        val newlyRead = MeshStore.markConversationRead(conversationKey)
+        if (conversationKey.startsWith("#")) return
+        val h = handleRef.get()
+        if (h == 0L || !CypherBridge.isLoaded) return
+        val peerHex = conversationKey.lowercase(Locale.US)
+        newlyRead.forEach { msg ->
+            val resp = synchronized(engineLock) {
+                CypherBridge.nativeSendReadReceipt(h, peerHex, msg.id)
+            }
+            processNativeResponse(resp)
         }
     }
 
@@ -216,14 +264,9 @@ object MeshController {
                 "[$normalizedChannel] $channelPayload"
             }
 
-            if (h != 0L && CypherBridge.isLoaded) {
-                val resp = synchronized(engineLock) {
-                    CypherBridge.nativeSendPublicMessage(h, payloadWithChannel)
-                }
-                MeshStore.recordTraffic(packets = 1, bytes = payloadWithChannel.length.toLong())
-                processNativeResponse(resp)
-            }
             val msgId = UUID.randomUUID().toString()
+            // Append locally BEFORE calling nativeSendPublicMessage so if the native engine
+            // emits an immediate loopback event we already have the outgoing message in place.
             MeshStore.appendMessage(
                 ChatMessage(
                     id = msgId,
@@ -240,6 +283,14 @@ object MeshController {
                     replyPreview = replyPreview,
                 ),
             )
+
+            if (h != 0L && CypherBridge.isLoaded) {
+                val resp = synchronized(engineLock) {
+                    CypherBridge.nativeSendPublicMessage(h, payloadWithChannel)
+                }
+                MeshStore.recordTraffic(packets = 1, bytes = payloadWithChannel.length.toLong())
+                processNativeResponse(resp)
+            }
             if (MeshStore.peers.value.any { it.connected }) {
                 MeshStore.markMessageDelivered(msgId, DeliveryStatus.DELIVERED)
             }
@@ -273,22 +324,8 @@ object MeshController {
         }
         val h = handleRef.get()
 
-        if (peerOnline && h != 0L && CypherBridge.isLoaded) {
-            val resp = synchronized(engineLock) {
-                CypherBridge.nativeSendPrivateMessage(h, normPeer, wirePayload, msgId)
-            }
-            MeshStore.recordTraffic(packets = 1, bytes = wirePayload.length.toLong())
-            processNativeResponse(resp)
-        } else if (MeshStore.storeAndForwardEnabled.value) {
-            MeshStore.enqueueOutboxMessage(
-                messageId = msgId,
-                recipientHex = normPeer,
-                payloadText = wirePayload,
-            )
-        }
-
         val initialStatus = when {
-            peerOnline -> DeliveryStatus.DELIVERED
+            peerOnline -> DeliveryStatus.SENT
             MeshStore.storeAndForwardEnabled.value -> DeliveryStatus.QUEUED
             else -> DeliveryStatus.SENT
         }
@@ -312,6 +349,29 @@ object MeshController {
                 replyPreview = replyPreview,
             ),
         )
+
+        if (h != 0L && CypherBridge.isLoaded) {
+            // Always pass to the Rust engine as well (which manages its own pending/Noise handshake queue
+            // and courier envelopes)
+            val resp = synchronized(engineLock) {
+                CypherBridge.nativeSendPrivateMessage(h, normPeer, wirePayload, msgId)
+            }
+            MeshStore.recordTraffic(packets = 1, bytes = wirePayload.length.toLong())
+            processNativeResponse(resp)
+            if (!peerOnline && MeshStore.storeAndForwardEnabled.value) {
+                MeshStore.enqueueOutboxMessage(
+                    messageId = msgId,
+                    recipientHex = normPeer,
+                    payloadText = wirePayload,
+                )
+            }
+        } else if (MeshStore.storeAndForwardEnabled.value) {
+            MeshStore.enqueueOutboxMessage(
+                messageId = msgId,
+                recipientHex = normPeer,
+                payloadText = wirePayload,
+            )
+        }
     }
 
     private fun flushOutboxForPeer(peerHex: String) {
@@ -337,14 +397,12 @@ object MeshController {
         val durationSec = (durationMs / 1000L).coerceAtLeast(1L)
         val activeConv = MeshStore.activeConversation.value
         val now = System.currentTimeMillis()
-        val audioPayloadB64 = runCatching {
-            val bytes = file.readBytes()
-            if (bytes.size <= 24_576) {
-                Base64.encodeToString(bytes, Base64.NO_WRAP)
-            } else {
-                ""
-            }
-        }.getOrDefault("")
+        val rawBytes = runCatching { file.readBytes() }.getOrNull()
+        val audioPayloadB64 = if (rawBytes != null && rawBytes.size <= 32_768) {
+            Base64.encodeToString(rawBytes, Base64.NO_WRAP)
+        } else {
+            ""
+        }
 
         val wireFrame = if (audioPayloadB64.isNotEmpty()) {
             "[VOICE_NOTE:${durationSec}s:${file.name}:$audioPayloadB64]"
@@ -352,23 +410,12 @@ object MeshController {
             "[VOICE_NOTE:${durationSec}s:${file.name}]"
         }
 
+        val h = handleRef.get()
         if (activeConv.startsWith("#")) {
-            val h = handleRef.get()
-            val channelWire = if (activeConv == MeshStore.PUBLIC_CONVERSATION) {
-                wireFrame
-            } else {
-                "[$activeConv] $wireFrame"
-            }
-            if (h != 0L && CypherBridge.isLoaded) {
-                val resp = synchronized(engineLock) {
-                    CypherBridge.nativeSendPublicMessage(h, channelWire)
-                }
-                MeshStore.recordTraffic(packets = 1, bytes = file.length())
-                processNativeResponse(resp)
-            }
+            val msgId = UUID.randomUUID().toString()
             MeshStore.appendMessage(
                 ChatMessage(
-                    id = UUID.randomUUID().toString(),
+                    id = msgId,
                     conversationKey = activeConv,
                     senderHex = MeshStore.localIdentityHex.value.ifEmpty { "self" },
                     senderLabel = MeshStore.nickname.value,
@@ -383,15 +430,61 @@ object MeshController {
                     attachmentMeta = "${durationSec}s",
                 ),
             )
+            if (h != 0L && CypherBridge.isLoaded) {
+                val resp = synchronized(engineLock) {
+                    if (activeConv == MeshStore.PUBLIC_CONVERSATION && rawBytes != null && rawBytes.size <= MAX_FILE_TRANSFER_BYTES) {
+                        CypherBridge.nativeSendFileBroadcast(h, file.name, "audio/mp4", rawBytes)
+                    } else {
+                        val channelWire = if (activeConv == MeshStore.PUBLIC_CONVERSATION) wireFrame else "[$activeConv] $wireFrame"
+                        CypherBridge.nativeSendPublicMessage(h, channelWire)
+                    }
+                }
+                MeshStore.recordTraffic(packets = 1, bytes = file.length().coerceAtLeast(128L))
+                processNativeResponse(resp)
+            }
         } else {
-            sendPrivateMessageInternal(
-                peerKeyHex = activeConv,
-                displayText = "Voice message (${formatDuration(durationSec)})",
-                wirePayload = wireFrame,
-                kind = MessageKind.VOICE_NOTE,
-                attachmentPath = file.absolutePath,
-                attachmentMeta = "${durationSec}s",
+            val normPeer = activeConv.lowercase(Locale.US)
+            val transferId = UUID.randomUUID().toString()
+            MeshStore.appendMessage(
+                ChatMessage(
+                    id = transferId,
+                    conversationKey = normPeer,
+                    senderHex = MeshStore.localIdentityHex.value.ifEmpty { "self" },
+                    senderLabel = MeshStore.nickname.value,
+                    text = "Voice message (${formatDuration(durationSec)})",
+                    timestampMs = now,
+                    outgoing = true,
+                    encrypted = true,
+                    hops = 0,
+                    delivery = DeliveryStatus.SENT,
+                    kind = MessageKind.VOICE_NOTE,
+                    attachmentPath = file.absolutePath,
+                    attachmentMeta = "${durationSec}s",
+                ),
             )
+            if (h != 0L && CypherBridge.isLoaded && rawBytes != null && rawBytes.size <= MAX_FILE_TRANSFER_BYTES) {
+                val resp = synchronized(engineLock) {
+                    CypherBridge.nativeSendFilePrivate(
+                        h,
+                        normPeer,
+                        file.name,
+                        "audio/mp4",
+                        rawBytes,
+                        transferId,
+                    )
+                }
+                MeshStore.recordTraffic(packets = 1, bytes = rawBytes.size.toLong())
+                processNativeResponse(resp)
+            } else {
+                sendPrivateMessageInternal(
+                    peerKeyHex = normPeer,
+                    displayText = "Voice message (${formatDuration(durationSec)})",
+                    wirePayload = wireFrame,
+                    kind = MessageKind.VOICE_NOTE,
+                    attachmentPath = file.absolutePath,
+                    attachmentMeta = "${durationSec}s",
+                )
+            }
         }
     }
 
@@ -402,31 +495,34 @@ object MeshController {
         val kind = if (isImage) MessageKind.IMAGE else MessageKind.FILE
         val sizeLabel = formatByteCount(fileSize)
         val displayTitle = if (isImage) "Photo ($fileName)" else "File: $fileName ($sizeLabel)"
-        val wireHeader = if (isImage) "[IMAGE:$fileName:$sizeLabel]" else "[FILE:$fileName:$sizeLabel]"
-        val mimeType = if (isImage) "image/jpeg" else "application/octet-stream"
+        val mimeType = if (isImage) {
+            "image/jpeg"
+        } else {
+            context.contentResolver.getType(uri) ?: "application/octet-stream"
+        }
 
+        val bytes = runCatching {
+            localFile?.takeIf { it.length() in 1..MAX_FILE_TRANSFER_BYTES }?.readBytes()
+        }.getOrNull()
+
+        // Compact inline base64 fallback for custom #channels or when file is small
+        val inlineB64 = if (isImage && localFile != null) {
+            encodeCompactImagePreviewB64(localFile)
+        } else {
+            ""
+        }
+        val wireHeader = when {
+            isImage && inlineB64.isNotEmpty() -> "[IMAGE:$fileName:$sizeLabel:$inlineB64]"
+            isImage -> "[IMAGE:$fileName:$sizeLabel]"
+            else -> "[FILE:$fileName:$sizeLabel]"
+        }
+
+        val h = handleRef.get()
         if (activeConv.startsWith("#")) {
-            val h = handleRef.get()
-            val payload = if (activeConv == MeshStore.PUBLIC_CONVERSATION) {
-                wireHeader
-            } else {
-                "[$activeConv] $wireHeader"
-            }
-            if (h != 0L && CypherBridge.isLoaded) {
-                val resp = synchronized(engineLock) {
-                    val bytes = localFile?.takeIf { it.length() <= 32_768L }?.readBytes()
-                    if (bytes != null && activeConv == MeshStore.PUBLIC_CONVERSATION) {
-                        CypherBridge.nativeSendFileBroadcast(h, fileName, mimeType, bytes)
-                    } else {
-                        CypherBridge.nativeSendPublicMessage(h, payload)
-                    }
-                }
-                MeshStore.recordTraffic(packets = 1, bytes = fileSize.coerceAtLeast(256L))
-                processNativeResponse(resp)
-            }
+            val msgId = UUID.randomUUID().toString()
             MeshStore.appendMessage(
                 ChatMessage(
-                    id = UUID.randomUUID().toString(),
+                    id = msgId,
                     conversationKey = activeConv,
                     senderHex = MeshStore.localIdentityHex.value.ifEmpty { "self" },
                     senderLabel = MeshStore.nickname.value,
@@ -441,24 +537,57 @@ object MeshController {
                     attachmentMeta = "$fileName • $sizeLabel",
                 ),
             )
-        } else {
-            val h = handleRef.get()
-            val bytes = localFile?.takeIf { it.length() <= 32_768L }?.readBytes()
-            if (h != 0L && CypherBridge.isLoaded && bytes != null) {
-                val transferId = UUID.randomUUID().toString()
+            if (h != 0L && CypherBridge.isLoaded) {
                 val resp = synchronized(engineLock) {
-                    CypherBridge.nativeSendFilePrivate(h, activeConv.lowercase(Locale.US), fileName, mimeType, bytes, transferId)
+                    if (bytes != null && activeConv == MeshStore.PUBLIC_CONVERSATION) {
+                        CypherBridge.nativeSendFileBroadcast(h, fileName, mimeType, bytes)
+                    } else {
+                        val payload = if (activeConv == MeshStore.PUBLIC_CONVERSATION) wireHeader else "[$activeConv] $wireHeader"
+                        CypherBridge.nativeSendPublicMessage(h, payload)
+                    }
+                }
+                MeshStore.recordTraffic(packets = 1, bytes = fileSize.coerceAtLeast(256L))
+                processNativeResponse(resp)
+            }
+        } else {
+            val normPeer = activeConv.lowercase(Locale.US)
+            val transferId = UUID.randomUUID().toString()
+            MeshStore.appendMessage(
+                ChatMessage(
+                    id = transferId,
+                    conversationKey = normPeer,
+                    senderHex = MeshStore.localIdentityHex.value.ifEmpty { "self" },
+                    senderLabel = MeshStore.nickname.value,
+                    text = displayTitle,
+                    timestampMs = now,
+                    outgoing = true,
+                    encrypted = true,
+                    hops = 0,
+                    delivery = DeliveryStatus.SENT,
+                    kind = kind,
+                    attachmentPath = localFile?.absolutePath ?: uri.toString(),
+                    attachmentMeta = "$fileName • $sizeLabel",
+                ),
+            )
+            if (h != 0L && CypherBridge.isLoaded && bytes != null) {
+                val resp = synchronized(engineLock) {
+                    CypherBridge.nativeSendFilePrivate(
+                        h,
+                        normPeer,
+                        fileName,
+                        mimeType,
+                        bytes,
+                        transferId,
+                    )
+                }
+                MeshStore.recordTraffic(packets = 1, bytes = bytes.size.toLong())
+                processNativeResponse(resp)
+            } else if (h != 0L && CypherBridge.isLoaded) {
+                val resp = synchronized(engineLock) {
+                    CypherBridge.nativeSendPrivateMessage(h, normPeer, wireHeader, transferId)
                 }
                 processNativeResponse(resp)
             }
-            sendPrivateMessageInternal(
-                peerKeyHex = activeConv,
-                displayText = displayTitle,
-                wirePayload = wireHeader,
-                kind = kind,
-                attachmentPath = localFile?.absolutePath ?: uri.toString(),
-                attachmentMeta = "$fileName • $sizeLabel",
-            )
         }
     }
 
@@ -493,13 +622,6 @@ object MeshController {
         if (activeConv.startsWith("#")) {
             val h = handleRef.get()
             val payload = if (activeConv == MeshStore.PUBLIC_CONVERSATION) wire else "[$activeConv] $wire"
-            if (h != 0L && CypherBridge.isLoaded) {
-                val resp = synchronized(engineLock) {
-                    CypherBridge.nativeSendPublicMessage(h, payload)
-                }
-                MeshStore.recordTraffic(packets = 1, bytes = payload.length.toLong())
-                processNativeResponse(resp)
-            }
             MeshStore.appendMessage(
                 ChatMessage(
                     id = UUID.randomUUID().toString(),
@@ -516,6 +638,13 @@ object MeshController {
                     attachmentMeta = coords,
                 ),
             )
+            if (h != 0L && CypherBridge.isLoaded) {
+                val resp = synchronized(engineLock) {
+                    CypherBridge.nativeSendPublicMessage(h, payload)
+                }
+                MeshStore.recordTraffic(packets = 1, bytes = payload.length.toLong())
+                processNativeResponse(resp)
+            }
         } else {
             sendPrivateMessageInternal(
                 peerKeyHex = activeConv,
@@ -933,35 +1062,88 @@ object MeshController {
             CypherBridge.nativeStateJson(h)
         } ?: return
         val jsonStr = jsonBytes.toString(Charsets.UTF_8)
+        ingestEngineStateJson(jsonStr)
+    }
+
+    /**
+     * Parses the JSON snapshot returned by `CypherBridge.nativeStateJson`:
+     * `{ "peerId": "...", "fingerprint": "...", "nickname": "...", "peers": [ { "peerId": "...", "nickname": "...", "connected": true, "verified": false, "favorite": false, "secureSession": false, "lastSeenMs": ..., "noisePublicKey": "...", "signingPublicKey": "..." } ] }`
+     * Also supports legacy keys (`identity_hex`, `peer_key`, `session_established`) for full compatibility.
+     */
+    internal fun ingestEngineStateJson(jsonStr: String) {
         runCatching {
             val root = JSONObject(jsonStr)
-            val idHex = root.optString("identity_hex", root.optString("my_peer_id", ""))
-            val fpHex = root.optString("fingerprint_hex", root.optString("my_fingerprint", ""))
+            val idHex = root.optString(
+                "peerId",
+                root.optString("identity_hex", root.optString("my_peer_id", "")),
+            )
+            val fpHex = root.optString(
+                "fingerprint",
+                root.optString("fingerprint_hex", root.optString("my_fingerprint", "")),
+            )
             if (idHex.isNotEmpty()) {
                 MeshStore.setLocalIdentity(idHex, fpHex)
             }
+            val latestRadioRssi = BleLinkLayer.active?.latestRssi?.value
             val peersArr = root.optJSONArray("peers") ?: JSONArray()
             val list = ArrayList<PeerEntry>(peersArr.length())
             for (i in 0 until peersArr.length()) {
                 val p = peersArr.getJSONObject(i)
-                val peerKey = p.optString("peer_key", p.optString("id", "")).lowercase(Locale.US)
+                val peerKey = p.optString(
+                    "peerId",
+                    p.optString("peer_key", p.optString("id", "")),
+                ).lowercase(Locale.US)
                 if (peerKey.isBlank()) continue
-                val nick = p.optString("nickname", "").ifEmpty { "anon#${peerKey.take(6)}" }
-                val peerFp = p.optString("fingerprint_hex", p.optString("fingerprint", ""))
+
+                val rawNick = p.optString("nickname", "").trim()
+                val nick = if (rawNick.isNotBlank() && !PeerIdentity.isLegacyAnonNickname(rawNick)) {
+                    rawNick
+                } else {
+                    MeshStore.resolvePeerNickname(peerKey)
+                }
+
+                val noisePub = p.optString("noisePublicKey", "")
+                val signingPub = p.optString("signingPublicKey", "")
+                val explicitFp = p.optString("fingerprint", p.optString("fingerprint_hex", ""))
+                val peerFp = when {
+                    explicitFp.isNotBlank() -> explicitFp
+                    noisePub.isNotBlank() -> PeerIdentity.fingerprintHex(peerKey, noisePub)
+                    signingPub.isNotBlank() -> PeerIdentity.fingerprintHex(peerKey, signingPub)
+                    else -> ""
+                }
+
                 val routeArr = p.optJSONArray("route_path")
                 val routeList = if (routeArr != null) {
                     List(routeArr.length()) { idx -> routeArr.optString(idx, "") }.filter { it.isNotBlank() }
                 } else {
                     emptyList()
                 }
+                val connected = p.optBoolean("connected", p.optBoolean("is_connected", false))
+                val sessionEstablished = p.optBoolean(
+                    "secureSession",
+                    p.optBoolean("session_established", p.optBoolean("has_noise_session", false)),
+                )
+                val verified = p.optBoolean("verified", false)
+                val lastSeenMs = p.optLong(
+                    "lastSeenMs",
+                    p.optLong("last_seen_ms", System.currentTimeMillis()),
+                )
+                val rssi = when {
+                    !p.isNull("rssi") && p.has("rssi") -> p.optInt("rssi")
+                    connected -> latestRadioRssi
+                    else -> null
+                }
+
                 val entry = PeerEntry(
                     peerKeyHex = peerKey,
                     nickname = nick,
-                    connected = p.optBoolean("connected", p.optBoolean("is_connected", false)),
-                    sessionEstablished = p.optBoolean("session_established", p.optBoolean("has_noise_session", false)),
-                    rssi = if (p.isNull("rssi")) null else p.optInt("rssi"),
+                    connected = connected,
+                    sessionEstablished = sessionEstablished,
+                    rssi = rssi,
                     hops = p.optInt("hops", 1).coerceIn(1, 7),
+                    lastSeenMs = if (lastSeenMs > 0L) lastSeenMs else System.currentTimeMillis(),
                     fingerprintHex = peerFp,
+                    verified = verified,
                     routePath = routeList,
                 )
                 list.add(entry)
@@ -990,21 +1172,56 @@ object MeshController {
         }
     }
 
-    private fun parseEngineEvents(eventsJson: String) {
+    internal fun parseEngineEvents(eventsJson: String) {
+        var shouldRefreshPeers = false
         runCatching {
             val arr = JSONArray(eventsJson)
             for (i in 0 until arr.length()) {
                 val item = arr.getJSONObject(i)
+                val typeTag = item.optString("type", "")
                 when {
-                    item.has("PublicMessageReceived") -> {
-                        val ev = item.getJSONObject("PublicMessageReceived")
+                    item.has("PublicMessageReceived") || typeTag == "PublicMessageReceived" -> {
+                        val ev = item.optJSONObject("PublicMessageReceived") ?: item
                         val sender = ev.optString("sender", "").lowercase(Locale.US)
-                        val nick = ev.optString("sender_nickname", "").ifEmpty {
+                        val rawNick = ev.optString(
+                            "nickname",
+                            ev.optString("sender_nickname", ""),
+                        ).trim()
+                        // Rust EngineEvent::PublicMessageReceived serializes message body under "content"
+                        val rawText = ev.optString("content", ev.optString("text", ""))
+                        val ts = ev.optLong("timestamp_ms", ev.optLong("timestamp", System.currentTimeMillis()))
+                        val msgId = ev.optString("message_id", "")
+                        val isRelayed = ev.optBoolean("is_relayed", false)
+                        val hops = if (ev.has("hops")) {
+                            ev.optInt("hops", 1).coerceIn(1, 7)
+                        } else if (isRelayed) {
+                            2
+                        } else {
+                            1
+                        }
+
+                        // Skip self-echo if our own broadcast comes back from the engine
+                        val localId = MeshStore.localIdentityHex.value.lowercase(Locale.US)
+                        if (localId.isNotBlank() && sender == localId) {
+                            continue
+                        }
+
+                        val nick = if (rawNick.isNotBlank() && !PeerIdentity.isLegacyAnonNickname(rawNick)) {
+                            rawNick.removePrefix("@")
+                        } else {
                             MeshStore.resolvePeerNickname(sender)
                         }
-                        val rawText = ev.optString("text", "")
-                        val ts = ev.optLong("timestamp_ms", System.currentTimeMillis())
-                        val hops = ev.optInt("hops", 1).coerceIn(1, 7)
+
+                        // Immediately record sender in MeshStore so they appear in People tab right away
+                        if (sender.isNotBlank()) {
+                            MeshStore.recordPeerSeenFromEvent(
+                                peerKeyHex = sender,
+                                nickname = nick,
+                                connected = true,
+                                hops = hops,
+                            )
+                            shouldRefreshPeers = true
+                        }
 
                         if (rawText.startsWith("[CHANNEL_COMMIT:")) {
                             handleChannelCommitmentFrame(rawText)
@@ -1022,9 +1239,12 @@ object MeshController {
                             bodyText
                         }
 
-                        val (kind, displayBody, meta, savedPath) = parseWireAttachment(decryptedBody)
+                        val (replyQuote, cleanBody) = extractReplyQuote(decryptedBody)
+                        val (kind, displayBody, meta, savedPath) = parseWireAttachment(cleanBody)
+                        val resolvedId = msgId.ifBlank { "$sender-$ts-${rawText.hashCode()}" }
+
                         val msg = ChatMessage(
-                            id = "$sender-$ts-${rawText.hashCode()}",
+                            id = resolvedId,
                             conversationKey = convKey,
                             senderHex = sender,
                             senderLabel = nick,
@@ -1036,15 +1256,122 @@ object MeshController {
                             kind = kind,
                             attachmentPath = savedPath,
                             attachmentMeta = meta,
+                            replyPreview = replyQuote,
                         )
                         MeshStore.appendMessage(msg)
                         maybePostIncomingNotification(msg)
                     }
+
+                    item.has("NoisePayloadReceived") || typeTag == "NoisePayloadReceived" -> {
+                        val ev = item.optJSONObject("NoisePayloadReceived") ?: item
+                        val peer = ev.optString("peer", ev.optString("sender", "")).lowercase(Locale.US)
+                        val payloadType = ev.optInt("payload_type", -1)
+                        val payloadArr = ev.optJSONArray("payload")
+                        val bytes = if (payloadArr != null) {
+                            ByteArray(payloadArr.length()) { idx -> payloadArr.optInt(idx).toByte() }
+                        } else {
+                            ByteArray(0)
+                        }
+
+                        if (peer.isNotBlank()) {
+                            MeshStore.recordPeerSeenFromEvent(
+                                peerKeyHex = peer,
+                                connected = true,
+                                sessionEstablished = true,
+                            )
+                            shouldRefreshPeers = true
+                        }
+
+                        when (payloadType) {
+                            0x01 -> {
+                                // Private message TLV: [0x00, len, ...id..., 0x01, len, ...content...]
+                                val decoded = decodePrivateMessage(bytes)
+                                    ?: (UUID.randomUUID().toString() to bytes.toString(Charsets.UTF_8))
+                                val (msgId, rawText) = decoded
+
+                                // Acknowledge delivery immediately (0x03)
+                                val h = handleRef.get()
+                                if (h != 0L && CypherBridge.isLoaded && peer.isNotBlank()) {
+                                    val ackResp = synchronized(engineLock) {
+                                        CypherBridge.nativeSendDeliveryAck(h, peer, msgId)
+                                    }
+                                    processNativeResponse(ackResp)
+                                    if (MeshStore.activeConversation.value.equals(peer, ignoreCase = true)) {
+                                        val readResp = synchronized(engineLock) {
+                                            CypherBridge.nativeSendReadReceipt(h, peer, msgId)
+                                        }
+                                        processNativeResponse(readResp)
+                                    }
+                                }
+
+                                if (rawText.startsWith("[VERIFY_CHALLENGE:")) {
+                                    handleIncomingVerifyChallenge(peer, rawText)
+                                    continue
+                                }
+                                if (rawText.startsWith("[VERIFY_RESPONSE:")) {
+                                    handleIncomingVerifyResponse(peer, rawText)
+                                    continue
+                                }
+
+                                val senderNick = MeshStore.resolvePeerNickname(peer)
+                                val (replyQuote, cleanBody) = extractReplyQuote(rawText)
+                                val (kind, displayBody, meta, savedPath) = parseWireAttachment(cleanBody)
+                                val msg = ChatMessage(
+                                    id = msgId,
+                                    conversationKey = peer,
+                                    senderHex = peer,
+                                    senderLabel = senderNick,
+                                    text = displayBody,
+                                    timestampMs = System.currentTimeMillis(),
+                                    outgoing = false,
+                                    encrypted = true,
+                                    hops = 1,
+                                    kind = kind,
+                                    attachmentPath = savedPath,
+                                    attachmentMeta = meta,
+                                    replyPreview = replyQuote,
+                                )
+                                MeshStore.appendMessage(msg)
+                                maybePostIncomingNotification(msg)
+                            }
+                            0x02 -> {
+                                // Read receipt
+                                val msgId = decodeReceiptMessageId(bytes)
+                                if (msgId.isNotBlank()) {
+                                    MeshStore.markMessageDelivered(msgId, DeliveryStatus.READ)
+                                }
+                            }
+                            0x03 -> {
+                                // Delivery ACK
+                                val msgId = decodeReceiptMessageId(bytes)
+                                if (msgId.isNotBlank()) {
+                                    MeshStore.markMessageDelivered(msgId, DeliveryStatus.DELIVERED)
+                                }
+                            }
+                            0x08 -> {
+                                // Private voice burst frame
+                                handleIncomingVoicePayload(peer, bytes, isPrivate = true)
+                            }
+                        }
+                    }
+
                     item.has("PrivateMessageReceived") -> {
                         val ev = item.getJSONObject("PrivateMessageReceived")
                         val sender = ev.optString("sender", "").lowercase(Locale.US)
-                        val rawText = ev.optString("text", "")
+                        val rawText = ev.optString("content", ev.optString("text", ""))
                         val ts = ev.optLong("timestamp_ms", System.currentTimeMillis())
+                        val msgId = ev.optString("message_id", "$sender-$ts-${rawText.hashCode()}")
+                        val explicitNick = ev.optString("nickname", ev.optString("sender_nickname", "")).trim()
+
+                        if (sender.isNotBlank()) {
+                            MeshStore.recordPeerSeenFromEvent(
+                                peerKeyHex = sender,
+                                nickname = explicitNick.takeIf { it.isNotBlank() },
+                                connected = true,
+                                sessionEstablished = true,
+                            )
+                            shouldRefreshPeers = true
+                        }
 
                         if (rawText.startsWith("[VERIFY_CHALLENGE:")) {
                             handleIncomingVerifyChallenge(sender, rawText)
@@ -1055,10 +1382,11 @@ object MeshController {
                             continue
                         }
 
-                        val senderNick = MeshStore.resolvePeerNickname(sender)
-                        val (kind, displayBody, meta, savedPath) = parseWireAttachment(rawText)
+                        val senderNick = explicitNick.ifEmpty { MeshStore.resolvePeerNickname(sender) }
+                        val (replyQuote, cleanBody) = extractReplyQuote(rawText)
+                        val (kind, displayBody, meta, savedPath) = parseWireAttachment(cleanBody)
                         val msg = ChatMessage(
-                            id = "$sender-$ts-${rawText.hashCode()}",
+                            id = msgId,
                             conversationKey = sender,
                             senderHex = sender,
                             senderLabel = senderNick,
@@ -1070,17 +1398,229 @@ object MeshController {
                             kind = kind,
                             attachmentPath = savedPath,
                             attachmentMeta = meta,
+                            replyPreview = replyQuote,
                         )
                         MeshStore.appendMessage(msg)
                         maybePostIncomingNotification(msg)
                     }
-                    item.has("SessionEstablished") -> {
-                        val ev = item.getJSONObject("SessionEstablished")
-                        val peerHex = ev.optString("peer", "").lowercase(Locale.US)
-                        if (peerHex.isNotBlank()) {
-                            flushOutboxForPeer(peerHex)
+
+                    item.has("CourierEnvelopeOpened") -> {
+                        val ev = item.getJSONObject("CourierEnvelopeOpened")
+                        val msgObj = ev.optJSONObject("message") ?: ev
+                        val msgId = msgObj.optString("id", UUID.randomUUID().toString())
+                        val sender = msgObj.optString("sender", ev.optString("sender", "")).lowercase(Locale.US)
+                        val content = msgObj.optString("content", msgObj.optString("text", ""))
+                        val ts = msgObj.optLong("timestamp_ms", System.currentTimeMillis())
+                        val convKey = if (sender.isNotBlank()) sender else MeshStore.PUBLIC_CONVERSATION
+                        if (sender.isNotBlank()) {
+                            MeshStore.recordPeerSeenFromEvent(peerKeyHex = sender, connected = true)
+                            shouldRefreshPeers = true
+                        }
+                        val senderNick = if (sender.isNotBlank()) MeshStore.resolvePeerNickname(sender) else "courier"
+                        val (replyQuote, cleanBody) = extractReplyQuote(content)
+                        val (kind, displayBody, meta, savedPath) = parseWireAttachment(cleanBody)
+                        val msg = ChatMessage(
+                            id = msgId,
+                            conversationKey = convKey,
+                            senderHex = sender.ifEmpty { "courier" },
+                            senderLabel = senderNick,
+                            text = displayBody,
+                            timestampMs = ts,
+                            outgoing = false,
+                            encrypted = true,
+                            hops = 2,
+                            kind = kind,
+                            attachmentPath = savedPath,
+                            attachmentMeta = meta,
+                            replyPreview = replyQuote,
+                        )
+                        MeshStore.appendMessage(msg)
+                        maybePostIncomingNotification(msg)
+                    }
+
+                    item.has("FileTransferReceived") || typeTag == "FileTransferReceived" -> {
+                        val ev = item.optJSONObject("FileTransferReceived") ?: item
+                        val sender = ev.optString("sender", "").lowercase(Locale.US)
+                        val isPrivate = ev.optBoolean("is_private", ev.optBoolean("encrypted", false))
+                        val fileObj = ev.optJSONObject("file") ?: ev
+                        val transferId = ev.optString("transfer_id", fileObj.optString("transfer_id", ""))
+                        val fileName = fileObj.optString("file_name", "attachment.bin")
+                        val mime = fileObj.optString("mime_type", "application/octet-stream")
+                        val contentArr = fileObj.optJSONArray("content")
+                        val bytes = when {
+                            contentArr != null -> ByteArray(contentArr.length()) { idx -> contentArr.optInt(idx).toByte() }
+                            fileObj.has("content_b64") -> runCatching {
+                                Base64.decode(fileObj.optString("content_b64", ""), Base64.NO_WRAP)
+                            }.getOrDefault(ByteArray(0))
+                            else -> ByteArray(0)
+                        }
+
+                        if (sender.isNotBlank()) {
+                            MeshStore.recordPeerSeenFromEvent(
+                                peerKeyHex = sender,
+                                connected = true,
+                                sessionEstablished = isPrivate,
+                            )
+                            shouldRefreshPeers = true
+                        }
+
+                        val savedPath = saveIncomingBinaryFile(fileName, bytes)
+                        val lowerName = fileName.lowercase(Locale.US)
+                        val kind = when {
+                            mime.startsWith("image/", ignoreCase = true) ||
+                                lowerName.endsWith(".jpg") ||
+                                lowerName.endsWith(".jpeg") ||
+                                lowerName.endsWith(".png") ||
+                                lowerName.endsWith(".webp") ||
+                                lowerName.endsWith(".gif") -> MessageKind.IMAGE
+                            mime.startsWith("audio/", ignoreCase = true) ||
+                                lowerName.endsWith(".m4a") ||
+                                lowerName.endsWith(".aac") ||
+                                lowerName.endsWith(".ogg") ||
+                                lowerName.endsWith(".wav") ||
+                                lowerName.endsWith(".mp3") -> MessageKind.VOICE_NOTE
+                            else -> MessageKind.FILE
+                        }
+                        val sizeStr = formatByteCount(bytes.size.toLong().coerceAtLeast(fileObj.optLong("file_size", 0L)))
+                        val displayTitle = when (kind) {
+                            MessageKind.IMAGE -> "Photo ($fileName)"
+                            MessageKind.VOICE_NOTE -> "Voice message ($sizeStr)"
+                            else -> "File: $fileName ($sizeStr)"
+                        }
+                        val convKey = if (isPrivate && sender.isNotBlank()) sender else MeshStore.PUBLIC_CONVERSATION
+                        val senderNick = if (sender.isNotBlank()) MeshStore.resolvePeerNickname(sender) else "peer"
+                        val resolvedId = transferId.ifBlank {
+                            "file-$sender-${System.currentTimeMillis()}-${fileName.hashCode()}"
+                        }
+
+                        val msg = ChatMessage(
+                            id = resolvedId,
+                            conversationKey = convKey,
+                            senderHex = sender,
+                            senderLabel = senderNick,
+                            text = displayTitle,
+                            timestampMs = System.currentTimeMillis(),
+                            outgoing = false,
+                            encrypted = isPrivate,
+                            hops = 1,
+                            kind = kind,
+                            attachmentPath = savedPath,
+                            attachmentMeta = "$fileName • $sizeStr",
+                        )
+                        MeshStore.appendMessage(msg)
+                        maybePostIncomingNotification(msg)
+                    }
+
+                    item.has("PublicVoiceFrameReceived") -> {
+                        val ev = item.getJSONObject("PublicVoiceFrameReceived")
+                        val peer = ev.optString("peer", "").lowercase(Locale.US)
+                        val burst = ev.optJSONObject("burst")
+                        if (peer.isNotBlank()) {
+                            MeshStore.recordPeerSeenFromEvent(peerKeyHex = peer, connected = true)
+                            shouldRefreshPeers = true
+                        }
+                        if (burst != null) {
+                            val payloadArr = burst.optJSONArray("payload")
+                            val bytes = if (payloadArr != null) {
+                                ByteArray(payloadArr.length()) { idx -> payloadArr.optInt(idx).toByte() }
+                            } else {
+                                ByteArray(0)
+                            }
+                            val flags = burst.optInt("flags", 0x03)
+                            val burstIdArr = burst.optJSONArray("burst_id")
+                            val burstKey = if (burstIdArr != null) {
+                                buildString {
+                                    for (k in 0 until burstIdArr.length()) {
+                                        append("%02x".format(burstIdArr.optInt(k) and 0xFF))
+                                    }
+                                }
+                            } else {
+                                "$peer-voice"
+                            }
+                            val buf = voiceBurstBuffers.getOrPut(burstKey) { ByteArrayOutputStream() }
+                            buf.write(bytes)
+                            // Flag bit 0x02 = end of voice burst (or single-frame burst)
+                            if ((flags and 0x02) != 0 || burst.optInt("seq", 0) == 0) {
+                                val fullAudio = voiceBurstBuffers.remove(burstKey)?.toByteArray() ?: bytes
+                                handleIncomingVoicePayload(peer, fullAudio, isPrivate = false)
+                            }
                         }
                     }
+
+                    item.has("MessageDeliveryStatusUpdated") -> {
+                        val ev = item.getJSONObject("MessageDeliveryStatusUpdated")
+                        val msgId = ev.optString("message_id", "")
+                        val sending = ev.optBoolean("sending", false)
+                        val failed = ev.optBoolean("failed", false)
+                        if (msgId.isNotBlank()) {
+                            val newStatus = when {
+                                failed -> DeliveryStatus.QUEUED
+                                sending -> DeliveryStatus.SENT
+                                else -> DeliveryStatus.DELIVERED
+                            }
+                            MeshStore.markMessageDelivered(msgId, newStatus)
+                        }
+                    }
+
+                    item.has("MeshPingResult") -> {
+                        val ev = item.getJSONObject("MeshPingResult")
+                        val peer = ev.optString("peer", "").lowercase(Locale.US)
+                        val rtt = ev.optLong("rtt_ms", 0L)
+                        val hops = if (ev.isNull("hops")) 1 else ev.optInt("hops", 1).coerceIn(1, 7)
+                        if (peer.isNotBlank()) {
+                            MeshStore.recordPeerSeenFromEvent(peerKeyHex = peer, connected = true, hops = hops)
+                            shouldRefreshPeers = true
+                            val nick = MeshStore.resolvePeerNickname(peer)
+                            appendSystemNotice(
+                                MeshStore.activeConversation.value,
+                                "Mesh ping reply from @$nick (${peer.take(8)}…): ${rtt} ms • $hops hop(s)",
+                            )
+                        }
+                    }
+
+                    item.has("PeerConnected") -> {
+                        val peerHex = extractPeerHexFromVariant(item.opt("PeerConnected"))
+                        if (peerHex.isNotBlank()) {
+                            MeshStore.recordPeerSeenFromEvent(peerKeyHex = peerHex, connected = true)
+                            flushOutboxForPeer(peerHex)
+                            shouldRefreshPeers = true
+                        }
+                    }
+
+                    item.has("PeerDisconnected") -> {
+                        shouldRefreshPeers = true
+                    }
+
+                    item.has("PeerListUpdated") -> {
+                        val listArr = item.optJSONArray("PeerListUpdated")
+                        if (listArr != null) {
+                            for (k in 0 until listArr.length()) {
+                                val peerHex = extractPeerHexFromVariant(listArr.opt(k))
+                                if (peerHex.isNotBlank()) {
+                                    MeshStore.recordPeerSeenFromEvent(peerKeyHex = peerHex, connected = true)
+                                }
+                            }
+                        }
+                        shouldRefreshPeers = true
+                    }
+
+                    item.has("SessionEstablished") -> {
+                        val peerHex = extractPeerHexFromVariant(item.opt("SessionEstablished"))
+                        if (peerHex.isNotBlank()) {
+                            MeshStore.recordPeerSeenFromEvent(
+                                peerKeyHex = peerHex,
+                                connected = true,
+                                sessionEstablished = true,
+                            )
+                            flushOutboxForPeer(peerHex)
+                            shouldRefreshPeers = true
+                        }
+                    }
+
+                    item.has("SessionRestored") || item.has("SessionFailed") || item.has("BluetoothStateChanged") -> {
+                        shouldRefreshPeers = true
+                    }
+
                     item.has("PeerUpdated") -> {
                         val ev = item.getJSONObject("PeerUpdated")
                         val peerHex = ev.optString("peer", "").lowercase(Locale.US)
@@ -1095,6 +1635,13 @@ object MeshController {
                             null
                         }
                         if (peerHex.isNotBlank()) {
+                            MeshStore.recordPeerSeenFromEvent(
+                                peerKeyHex = peerHex,
+                                nickname = nick,
+                                connected = true,
+                                hops = hops,
+                                rssi = rssi,
+                            )
                             MeshGraphService.updateFromAnnouncement(
                                 originID = peerHex,
                                 originNickname = nick,
@@ -1110,6 +1657,107 @@ object MeshController {
         }.onFailure { e ->
             Log.w(TAG, "Failed parsing engine events", e)
         }
+
+        if (shouldRefreshPeers) {
+            refreshEngineState()
+        }
+    }
+
+    private fun extractPeerHexFromVariant(raw: Any?): String {
+        return when (raw) {
+            is String -> raw.lowercase(Locale.US)
+            is JSONObject -> raw.optString("peer", raw.optString("peerId", "")).lowercase(Locale.US)
+            else -> ""
+        }
+    }
+
+    /**
+     * Decodes a `PrivateMessagePacket` TLV (`0x00 len id · 0x01 len content`) emitted inside
+     * `NoisePayloadReceived` (`payload_type == 0x01`).
+     */
+    internal fun decodePrivateMessage(bytes: ByteArray): Pair<String, String>? {
+        var offset = if (bytes.size >= 3 && (bytes[0].toInt() and 0xFF) == 0x01 && (bytes[1].toInt() and 0xFF) == 0x00) {
+            1
+        } else {
+            0
+        }
+        var id: String? = null
+        var content: String? = null
+        while (offset + 2 <= bytes.size) {
+            val tag = bytes[offset].toInt() and 0xFF
+            val len = bytes[offset + 1].toInt() and 0xFF
+            offset += 2
+            if (offset + len > bytes.size) return null
+            val slice = String(bytes, offset, len, Charsets.UTF_8)
+            offset += len
+            when (tag) {
+                0x00 -> id = slice
+                0x01 -> content = slice
+            }
+        }
+        return if (id != null && content != null) id to content else null
+    }
+
+    /**
+     * Decodes a read receipt (`0x02`) or delivery ACK (`0x03`) message ID.
+     */
+    internal fun decodeReceiptMessageId(bytes: ByteArray): String {
+        if (bytes.isEmpty()) return ""
+        if (bytes.size >= 2) {
+            val len = bytes[0].toInt() and 0xFF
+            if (len in 1..(bytes.size - 1)) {
+                return String(bytes, 1, len, Charsets.UTF_8)
+            }
+        }
+        return String(bytes, Charsets.UTF_8).trim()
+    }
+
+    private fun saveIncomingBinaryFile(fileName: String, bytes: ByteArray): String? {
+        val ctx = appContext ?: return null
+        if (bytes.isEmpty()) return null
+        return runCatching {
+            val dir = File(ctx.filesDir, "incoming").apply { mkdirs() }
+            val safeName = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "attachment.bin" }
+            val target = File(dir, "${System.currentTimeMillis()}_$safeName")
+            target.writeBytes(bytes)
+            target.absolutePath
+        }.getOrNull()
+    }
+
+    private fun handleIncomingVoicePayload(peerHex: String, bytes: ByteArray, isPrivate: Boolean) {
+        if (bytes.isEmpty()) return
+        val savedPath = saveIncomingBinaryFile("voice_${System.currentTimeMillis()}.m4a", bytes)
+        val convKey = if (isPrivate && peerHex.isNotBlank()) peerHex else MeshStore.PUBLIC_CONVERSATION
+        val nick = if (peerHex.isNotBlank()) MeshStore.resolvePeerNickname(peerHex) else "peer"
+        val estSec = (bytes.size / 1800L).coerceAtLeast(1L)
+        val msg = ChatMessage(
+            id = "voice-$peerHex-${System.currentTimeMillis()}",
+            conversationKey = convKey,
+            senderHex = peerHex,
+            senderLabel = nick,
+            text = "Voice message (${formatDuration(estSec)})",
+            timestampMs = System.currentTimeMillis(),
+            outgoing = false,
+            encrypted = isPrivate,
+            hops = 1,
+            kind = MessageKind.VOICE_NOTE,
+            attachmentPath = savedPath,
+            attachmentMeta = "${estSec}s",
+        )
+        MeshStore.appendMessage(msg)
+        maybePostIncomingNotification(msg)
+    }
+
+    private fun extractReplyQuote(bodyText: String): Pair<String?, String> {
+        if (bodyText.startsWith("> ")) {
+            val newlineIdx = bodyText.indexOf('\n')
+            if (newlineIdx > 2 && newlineIdx < bodyText.length - 1) {
+                val quote = bodyText.substring(2, newlineIdx).trim()
+                val rest = bodyText.substring(newlineIdx + 1)
+                return quote to rest
+            }
+        }
+        return null to bodyText
     }
 
     private fun handleChannelCommitmentFrame(rawText: String) {
@@ -1197,7 +1845,7 @@ object MeshController {
                 val audioB64 = parts.getOrNull(2).orEmpty()
                 val savedFile = if (audioB64.isNotBlank() && appContext != null) {
                     runCatching {
-                        val dir = File(appContext!!.cacheDir, "voice_notes").apply { mkdirs() }
+                        val dir = File(appContext!!.filesDir, "incoming").apply { mkdirs() }
                         val outFile = File(dir, fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_"))
                         outFile.writeBytes(Base64.decode(audioB64, Base64.NO_WRAP))
                         outFile.absolutePath
@@ -1209,17 +1857,30 @@ object MeshController {
             }
             bodyText.startsWith("[IMAGE:") && bodyText.endsWith("]") -> {
                 val inner = bodyText.removePrefix("[IMAGE:").removeSuffix("]")
-                val parts = inner.split(":")
+                val parts = inner.split(":", limit = 3)
                 val name = parts.getOrNull(0) ?: "photo.jpg"
                 val size = parts.getOrNull(1) ?: ""
-                ParsedWireAttachment(MessageKind.IMAGE, "Photo ($name)", "$name • $size", null)
+                val imgB64 = parts.getOrNull(2).orEmpty()
+                val savedFile = if (imgB64.isNotBlank() && appContext != null) {
+                    runCatching {
+                        val dir = File(appContext!!.filesDir, "incoming").apply { mkdirs() }
+                        val outFile = File(dir, "${System.currentTimeMillis()}_${name.replace(Regex("[^a-zA-Z0-9._-]"), "_")}")
+                        outFile.writeBytes(Base64.decode(imgB64, Base64.NO_WRAP))
+                        outFile.absolutePath
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                val meta = if (size.isNotBlank()) "$name • $size" else name
+                ParsedWireAttachment(MessageKind.IMAGE, "Photo ($name)", meta, savedFile)
             }
             bodyText.startsWith("[FILE:") && bodyText.endsWith("]") -> {
                 val inner = bodyText.removePrefix("[FILE:").removeSuffix("]")
                 val parts = inner.split(":")
                 val name = parts.getOrNull(0) ?: "document.bin"
                 val size = parts.getOrNull(1) ?: ""
-                ParsedWireAttachment(MessageKind.FILE, "File: $name ($size)", "$name • $size", null)
+                val meta = if (size.isNotBlank()) "$name • $size" else name
+                ParsedWireAttachment(MessageKind.FILE, "File: $name ($size)", meta, null)
             }
             bodyText.startsWith("[LOCATION:") && bodyText.endsWith("]") -> {
                 val inner = bodyText.removePrefix("[LOCATION:").removeSuffix("]")
@@ -1250,19 +1911,28 @@ object MeshController {
         return MeshStore.PUBLIC_CONVERSATION to rawText
     }
 
+    /**
+     * Copies an attachment into local storage. For images, downscales large photos to max 1080px
+     * JPEG and names them `img_<uuid>.jpg` so they transfer quickly over BLE and qualify for
+     * `PrivateMediaMessageIdentity` receipt tracking in `cypher-core`.
+     */
     private fun copyAttachmentToLocalCache(
         context: Context,
         uri: Uri,
         isImage: Boolean,
     ): Triple<String, Long, File?> {
-        var name = if (isImage) "image_${System.currentTimeMillis()}.jpg" else "file_${System.currentTimeMillis()}.bin"
+        var name = if (isImage) {
+            "img_${UUID.randomUUID()}.jpg"
+        } else {
+            "file_${System.currentTimeMillis()}.bin"
+        }
         var size = 0L
         runCatching {
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                 val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
                 if (cursor.moveToFirst()) {
-                    if (nameIdx >= 0) {
+                    if (!isImage && nameIdx >= 0) {
                         cursor.getString(nameIdx)?.takeIf { it.isNotBlank() }?.let { name = it }
                     }
                     if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) {
@@ -1272,18 +1942,56 @@ object MeshController {
             }
         }
         val copied = runCatching {
-            val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
-            val safeName = "${System.currentTimeMillis()}_${name.replace(Regex("[^a-zA-Z0-9._-]"), "_")}"
+            val dir = File(context.filesDir, "attachments").apply { mkdirs() }
+            val safeName = if (isImage) {
+                name
+            } else {
+                "${System.currentTimeMillis()}_${name.replace(Regex("[^a-zA-Z0-9._-]"), "_")}"
+            }
             val dest = File(dir, safeName)
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                dest.outputStream().use { output ->
-                    input.copyTo(output)
+            val rawBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            if (rawBytes != null) {
+                if (isImage) {
+                    val bmp = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
+                    if (bmp != null) {
+                        val maxDim = max(bmp.width, bmp.height)
+                        val scaled = if (maxDim > 1080) {
+                            val ratio = 1080.0 / maxDim.toDouble()
+                            val w = (bmp.width * ratio).roundToInt().coerceAtLeast(1)
+                            val h = (bmp.height * ratio).roundToInt().coerceAtLeast(1)
+                            Bitmap.createScaledBitmap(bmp, w, h, true)
+                        } else {
+                            bmp
+                        }
+                        dest.outputStream().use { out ->
+                            scaled.compress(Bitmap.CompressFormat.JPEG, 82, out)
+                        }
+                    } else {
+                        dest.writeBytes(rawBytes)
+                    }
+                } else {
+                    dest.writeBytes(rawBytes)
                 }
             }
-            if (size <= 0L) size = dest.length()
+            size = dest.length()
             dest
         }.getOrNull()
-        return Triple(name, size.coerceAtLeast(1024L), copied)
+        return Triple(name, size.coerceAtLeast(512L), copied)
+    }
+
+    private fun encodeCompactImagePreviewB64(file: File): String {
+        return runCatching {
+            val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: return ""
+            val maxDim = max(bmp.width, bmp.height).coerceAtLeast(1)
+            val ratio = (180.0 / maxDim.toDouble()).coerceAtMost(1.0)
+            val w = (bmp.width * ratio).roundToInt().coerceAtLeast(1)
+            val h = (bmp.height * ratio).roundToInt().coerceAtLeast(1)
+            val thumb = Bitmap.createScaledBitmap(bmp, w, h, true)
+            val out = ByteArrayOutputStream()
+            thumb.compress(Bitmap.CompressFormat.JPEG, 65, out)
+            val bytes = out.toByteArray()
+            if (bytes.size <= 16_384) Base64.encodeToString(bytes, Base64.NO_WRAP) else ""
+        }.getOrDefault("")
     }
 
     private fun formatByteCount(bytes: Long): String {

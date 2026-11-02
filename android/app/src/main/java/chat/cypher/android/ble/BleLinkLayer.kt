@@ -311,10 +311,37 @@ class BleLinkLayer(private val context: Context) {
         }
     }
 
+    private var stateReceiverRegistered = false
+    private val btStateReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: android.content.Intent?) {
+            if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
+                BluetoothAdapter.STATE_ON -> pushRadioState(5L)
+                BluetoothAdapter.STATE_OFF -> {
+                    stopScanInternal()
+                    stopAdvertisingInternal()
+                    pushRadioState(4L)
+                }
+                BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_TURNING_ON -> {
+                    pushRadioState(1L)
+                }
+            }
+        }
+    }
+
     // ---- lifecycle --------------------------------------------------------------
 
     fun start(): Boolean {
         active = this
+        if (!stateReceiverRegistered) {
+            runCatching {
+                context.registerReceiver(
+                    btStateReceiver,
+                    android.content.IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+                )
+                stateReceiverRegistered = true
+            }
+        }
         val adapter = bluetoothAdapter ?: run {
             pushEvent(EVENT_RADIO_STATE, argInt = 2)
             return false
@@ -349,6 +376,10 @@ class BleLinkLayer(private val context: Context) {
     fun stop() {
         if (active === this) {
             active = null
+        }
+        if (stateReceiverRegistered) {
+            runCatching { context.unregisterReceiver(btStateReceiver) }
+            stateReceiverRegistered = false
         }
         stopScanInternal()
         stopAdvertisingInternal()

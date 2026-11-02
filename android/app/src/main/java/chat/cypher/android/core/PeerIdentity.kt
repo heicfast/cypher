@@ -2,6 +2,8 @@ package chat.cypher.android.core
 
 import androidx.compose.ui.graphics.Color
 import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -17,11 +19,41 @@ data class PeerUiModel(
     val distanceMeters: Int? = null,
 )
 
+data class CreativeProfileIdentity(
+    val displayName: String,
+    val username: String,
+)
+
 /**
  * Cryptographic fingerprint, deterministic peer color, RSSI distance estimation,
- * and peer identity utilities.
+ * creative mesh moniker generation, and peer identity utilities.
  */
 object PeerIdentity {
+
+    private val CreativeAdjectives = listOf(
+        "cipher", "neon", "shadow", "quantum", "cobalt",
+        "aether", "velvet", "solaris", "onyx", "arctic",
+        "nova", "stellar", "prism", "vortex", "obsidian",
+        "zenith", "lunar", "ember", "crimson", "astral",
+    )
+
+    private val CreativeNouns = listOf(
+        "lynx", "raven", "fox", "falcon", "voyager",
+        "drifter", "nomad", "specter", "sentinel", "orbit",
+        "vector", "warden", "spark", "atlas", "phoenix",
+        "pilot", "pulse", "geist", "wolf", "horizon",
+    )
+
+    val PresetAvatars: List<Pair<String, String>> = listOf(
+        "preset:neon_lynx" to "🦊",
+        "preset:cipher_falcon" to "🦅",
+        "preset:quantum_wolf" to "🐺",
+        "preset:astral_owl" to "🦉",
+        "preset:solaris_dragon" to "🐉",
+        "preset:arctic_tiger" to "🐯",
+        "preset:onyx_panther" to "🐆",
+        "preset:nova_orbit" to "🪐",
+    )
 
     private val DarkPeerPalette = listOf(
         Color(0xFFA78BFA), // Lavender Purple
@@ -44,6 +76,74 @@ object PeerIdentity {
         Color(0xFF0284C7),
         Color(0xFFBE185D),
     )
+
+    /**
+     * Generates a creative, memorable default profile identity (both Display Name and `@username`)
+     * from a 32-byte seed or random entropy, replacing generic `anon1234` handles.
+     */
+    fun generateCreativeProfileIdentity(seed: ByteArray? = null): CreativeProfileIdentity {
+        val adjIdx: Int
+        val nounIdx: Int
+        val tagNum: Int
+        if (seed != null && seed.size >= 6) {
+            val b0 = (seed[0].toInt() and 0xFF)
+            val b1 = (seed[1].toInt() and 0xFF)
+            val b2 = ((seed[2].toInt() and 0xFF) shl 8) or (seed[3].toInt() and 0xFF)
+            adjIdx = b0 % CreativeAdjectives.size
+            nounIdx = b1 % CreativeNouns.size
+            tagNum = 10 + (b2 % 89)
+        } else {
+            val rng = SecureRandom()
+            adjIdx = rng.nextInt(CreativeAdjectives.size)
+            nounIdx = rng.nextInt(CreativeNouns.size)
+            tagNum = 10 + rng.nextInt(89)
+        }
+        val adj = CreativeAdjectives[adjIdx]
+        val noun = CreativeNouns[nounIdx]
+        val display = "${adj.replaceFirstChar { it.titlecase(Locale.US) }} ${noun.replaceFirstChar { it.titlecase(Locale.US) }}"
+        val username = "${adj}_${noun}_$tagNum"
+        return CreativeProfileIdentity(displayName = display, username = username)
+    }
+
+    /**
+     * Returns true if a nickname looks like an auto-generated placeholder (`anon`, `anon1234`, `anon#...`).
+     */
+    fun isLegacyAnonNickname(nickname: String?): Boolean {
+        if (nickname.isNullOrBlank()) return true
+        val cleaned = nickname.trim().removePrefix("@").lowercase(Locale.US)
+        if (cleaned == "anon" || cleaned == "anonymous") return true
+        if (cleaned.matches(Regex("^anon[#_\\-]?[0-9a-f]{1,8}$"))) return true
+        return false
+    }
+
+    /**
+     * Deterministically derives a clean, creative handle for a remote peer when its announced
+     * nickname is empty or generic `anon`.
+     */
+    fun creativeHandleForPeer(peerIdHex: String): String {
+        val norm = peerIdHex.trim().lowercase(Locale.US)
+        if (norm.isBlank()) return "cipher_node"
+        var h1 = 2166136261L
+        for (ch in norm) {
+            h1 = (h1 xor ch.code.toLong()) * 16777619L
+        }
+        val adj = CreativeAdjectives[(abs(h1) % CreativeAdjectives.size).toInt()]
+        val noun = CreativeNouns[(abs(h1 ushr 8) % CreativeNouns.size).toInt()]
+        val suffix = norm.take(3)
+        return "${adj}_${noun}#$suffix"
+    }
+
+    fun formatDisplayNameFromUsername(username: String): String {
+        val clean = username.trim().removePrefix("@")
+        if (clean.isBlank()) return "Cipher Node"
+        val withoutHash = clean.substringBefore('#')
+        val parts = withoutHash.split('_', '-', '.', ' ').filter { it.isNotBlank() }
+        if (parts.isEmpty()) return clean
+        val words = parts
+            .filterNot { it.all { ch -> ch.isDigit() } && parts.size > 2 }
+            .map { part -> part.replaceFirstChar { it.titlecase(Locale.US) } }
+        return words.joinToString(" ").ifBlank { clean }
+    }
 
     fun colorForPeer(peerIdHex: String, isDark: Boolean = true): Color {
         val palette = if (isDark) DarkPeerPalette else LightPeerPalette
@@ -105,7 +205,7 @@ object PeerIdentity {
     }
 
     fun formatHandle(nickname: String, peerIdHex: String): String {
-        val cleanNick = nickname.trim().ifEmpty { "peer-${peerIdHex.take(4)}" }
+        val cleanNick = nickname.trim().ifEmpty { creativeHandleForPeer(peerIdHex) }
         if (cleanNick.startsWith("@") || cleanNick.contains("#")) return cleanNick
         val suffix = peerIdHex.takeLast(4).lowercase()
         return "@$cleanNick#$suffix"

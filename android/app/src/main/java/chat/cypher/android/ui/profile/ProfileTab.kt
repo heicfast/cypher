@@ -4,10 +4,15 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,15 +26,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Notifications
@@ -59,6 +68,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -76,12 +86,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import chat.cypher.android.core.AppThemeMode
 import chat.cypher.android.core.AutoDeleteTimer
 import chat.cypher.android.core.MeshController
 import chat.cypher.android.core.MeshStore
+import chat.cypher.android.core.PeerIdentity
 import chat.cypher.android.onboarding.BatteryOptimizationHelper
 import chat.cypher.android.ui.components.AboutCypherSheet
 import chat.cypher.android.ui.components.PeerAvatar
@@ -122,6 +134,8 @@ fun ProfileTab(
     val palette = CypherTheme.colors
 
     val nickname by MeshStore.nickname.collectAsState()
+    val displayName by MeshStore.displayName.collectAsState()
+    val avatarUri by MeshStore.avatarUri.collectAsState()
     val statusBio by MeshStore.statusBio.collectAsState()
     val localIdHex by MeshStore.localIdentityHex.collectAsState()
     val localFpHex by MeshStore.localFingerprintHex.collectAsState()
@@ -250,6 +264,92 @@ fun ProfileTab(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 item {
+                    // Profile Summary Card (tap to customize name, @username, or profile picture)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(palette.surface)
+                            .border(1.dp, palette.borderSubtle, RoundedCornerShape(20.dp))
+                            .clickable { activeSheet = SettingsSubSheet.PROFILE }
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
+                            .testTag("settings_profile_hero_card"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            PeerAvatar(
+                                peerKeyHex = localIdHex.ifEmpty { "self" },
+                                nickname = displayName.ifBlank { nickname },
+                                size = 52.dp,
+                                connected = true,
+                                sessionEstablished = true,
+                                avatarOverride = avatarUri,
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = displayName.ifBlank { PeerIdentity.formatDisplayNameFromUsername(nickname) },
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.5.sp,
+                                    ),
+                                    color = palette.textPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "@$nickname",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = GeistMono,
+                                        color = palette.accentLight,
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (statusBio.isNotBlank()) {
+                                    Text(
+                                        text = statusBio,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.textSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(palette.accent.copy(alpha = 0.16f))
+                                .border(1.dp, palette.accent.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Edit,
+                                    contentDescription = "Edit profile",
+                                    tint = palette.accentLight,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = "Edit",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = palette.accentLight,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                item {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -278,14 +378,21 @@ fun ProfileTab(
     when (activeSheet) {
         SettingsSubSheet.PROFILE -> {
             ProfileSettingsBottomSheet(
+                displayName = displayName,
                 nickname = nickname,
+                avatarUri = avatarUri,
                 statusBio = statusBio,
                 localIdHex = localIdHex,
                 localFingerprintHex = localFpHex,
                 onDismiss = { activeSheet = null },
-                onSaveNickname = { newNick, newBio ->
-                    MeshController.updateNickname(context, newNick)
-                    MeshStore.updateStatusBio(context, newBio)
+                onSaveProfile = { newDisplayName, newNick, newBio, newAvatarUri ->
+                    MeshController.updateFullProfile(
+                        context = context,
+                        displayName = newDisplayName,
+                        username = newNick,
+                        statusBio = newBio,
+                        avatarUri = newAvatarUri,
+                    )
                     activeSheet = null
                 },
                 onRotateIdentity = {
@@ -443,20 +550,35 @@ private fun SettingsMenuRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ProfileSettingsBottomSheet(
+    displayName: String,
     nickname: String,
+    avatarUri: String?,
     statusBio: String,
     localIdHex: String,
     localFingerprintHex: String,
     onDismiss: () -> Unit,
-    onSaveNickname: (String, String) -> Unit,
+    onSaveProfile: (String, String, String, String?) -> Unit,
     onRotateIdentity: () -> Unit,
 ) {
     val context = LocalContext.current
     val palette = CypherTheme.colors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var editDisplayName by remember(displayName) { mutableStateOf(displayName) }
     var editNick by remember(nickname) { mutableStateOf(nickname) }
     var editBio by remember(statusBio) { mutableStateOf(statusBio) }
+    var editAvatarUri by remember(avatarUri) { mutableStateOf(avatarUri) }
     var copiedFp by remember { mutableStateOf(false) }
+
+    val avatarPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val savedPath = MeshStore.saveProfilePictureFromUri(context, uri)
+            if (savedPath != null) {
+                editAvatarUri = savedPath
+            }
+        }
+    }
 
     val displayFp = remember(localIdHex, localFingerprintHex) {
         localFingerprintHex.ifBlank {
@@ -475,38 +597,153 @@ private fun ProfileSettingsBottomSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                PeerAvatar(
-                    peerKeyHex = localIdHex.ifEmpty { editNick },
-                    nickname = editNick,
-                    size = 56.dp,
-                    connected = true,
-                    sessionEstablished = true,
-                )
-                Column {
+                Box(
+                    modifier = Modifier
+                        .clickable {
+                            avatarPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        }
+                        .testTag("profile_avatar_picker_button"),
+                ) {
+                    PeerAvatar(
+                        peerKeyHex = localIdHex.ifEmpty { "self" },
+                        nickname = editDisplayName.ifBlank { editNick },
+                        size = 64.dp,
+                        connected = true,
+                        sessionEstablished = true,
+                        avatarOverride = editAvatarUri,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(palette.accent)
+                            .border(1.5.dp, palette.surfaceElevated, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.CameraAlt,
+                            contentDescription = "Choose profile photo",
+                            tint = Color.White,
+                            modifier = Modifier.size(12.dp),
+                        )
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Profile & Ephemeral Identity",
+                        text = "Profile & Mesh Identity",
                         style = MaterialTheme.typography.headlineMedium,
                         color = palette.textPrimary,
                     )
                     Text(
-                        text = "Ed25519 / Noise_XX_25519_ChaChaPoly_BLAKE2s",
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = GeistMono),
+                        text = "Tap avatar to upload photo or choose a badge below",
+                        style = MaterialTheme.typography.bodySmall,
                         color = palette.textSecondary,
                     )
                 }
             }
 
+            // Preset Avatars + Gallery Photo Button Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        avatarPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                        )
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.CameraAlt,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Photo", style = MaterialTheme.typography.labelMedium)
+                }
+
+                PeerIdentity.PresetAvatars.forEach { (presetId, presetEmoji) ->
+                    val isSelected = editAvatarUri == presetId
+                    val presetTint = PeerIdentity.colorForPeer(presetId, isDark = true)
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(presetTint.copy(alpha = if (isSelected) 0.34f else 0.16f))
+                            .border(
+                                width = if (isSelected) 2.dp else 1.dp,
+                                color = if (isSelected) palette.accentLight else presetTint.copy(alpha = 0.5f),
+                                shape = CircleShape,
+                            )
+                            .clickable { editAvatarUri = presetId },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(text = presetEmoji, fontSize = 18.sp)
+                    }
+                }
+
+                if (!editAvatarUri.isNullOrBlank()) {
+                    TextButton(onClick = { editAvatarUri = null }) {
+                        Text("Reset", color = palette.textSecondary, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = editDisplayName,
+                onValueChange = { editDisplayName = it.take(36) },
+                singleLine = true,
+                label = { Text("Display Name") },
+                placeholder = { Text("e.g. Neon Lynx") },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = palette.accent,
+                    unfocusedBorderColor = palette.borderSubtle,
+                    focusedTextColor = palette.textPrimary,
+                    unfocusedTextColor = palette.textPrimary,
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("profile_display_name_input"),
+            )
+
             OutlinedTextField(
                 value = editNick,
                 onValueChange = { editNick = it.take(24) },
                 singleLine = true,
-                label = { Text("Nickname") },
+                label = { Text("Username (@handle)") },
+                trailingIcon = {
+                    IconButton(
+                        onClick = {
+                            val randomBytes = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+                            val creative = PeerIdentity.generateCreativeProfileIdentity(randomBytes)
+                            editNick = creative.username
+                            editDisplayName = creative.displayName
+                        },
+                        modifier = Modifier.testTag("profile_generate_creative_handle_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AutoAwesome,
+                            contentDescription = "Generate creative handle",
+                            tint = palette.accentLight,
+                        )
+                    }
+                },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = palette.accent,
                     unfocusedBorderColor = palette.borderSubtle,
@@ -575,7 +812,7 @@ private fun ProfileSettingsBottomSheet(
                             onClick = {
                                 val share = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, "Cipher Mesh Identity (@$editNick): $displayFp")
+                                    putExtra(Intent.EXTRA_TEXT, "Cipher Mesh Identity ($editDisplayName @$editNick): $displayFp")
                                 }
                                 context.startActivity(Intent.createChooser(share, "Share Identity"))
                             },
@@ -599,7 +836,7 @@ private fun ProfileSettingsBottomSheet(
             }
 
             Button(
-                onClick = { onSaveNickname(editNick, editBio) },
+                onClick = { onSaveProfile(editDisplayName, editNick, editBio, editAvatarUri) },
                 colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
